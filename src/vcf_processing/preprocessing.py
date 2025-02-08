@@ -4,34 +4,53 @@ from typing import Tuple, Union
 
 import polars as pl
 
-from vcf_processing.models import VCFFormatField
+from vcf_processing.models import VCFFormatField, VCFInfoField
 
 
-def parse_format_string(format_string: str) -> dict:
+VCF_HEADER = [
+    "#CHROM",
+    "POS",
+    "ID",
+    "REF",
+    "ALT",
+    "QUAL",
+    "FILTER",
+    "INFO",
+    "FORMAT",
+]
+
+
+def parse_metadata_string(metadata_string: str) -> dict:
     """
-    Parse a VCF FORMAT string into a dict
+    Parse a VCF metadata string into a dict
 
-    :param format_string: the VCF FORMAT string to parse into a dict
-    :return: the VCF FORMAT string as a dict
+    :param metadata_string: the VCF metadata string to parse into a dict
+    :return: the VCF metadata string as a dict
     """
-    if isinstance(format_string, str):
-        if format_string := re.search(r"(?<=^##FORMAT=<)(.*)(?=>$)", format_string):
-            format_string = format_string.group(1)
+    if isinstance(metadata_string, str):
+        if metadata_string := re.search(
+            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)", 
+            metadata_string
+        ):
+            metadata_string = metadata_string.group(1)
         else:
-            raise ValueError("Format string is not well-formed")
+            raise ValueError("Metadata string is not well-formed")
     else:
-        raise TypeError("Expected type str for the VCF FORMAT")
+        raise TypeError("Expected type str for the VCF metadata string")
 
-    format_metadata = re.split(
+    metadata = re.split(
         r',(?=(?:[^"]*"[^"]*")*[^"]*$)',
-        format_string                      
+        metadata_string                      
     )
 
     id, number, data_type, description = None, None, None, None
     other = {}
 
-    for key_value_pair in format_metadata:
-        key, value = key_value_pair.split("=")
+    for key_value_pair in metadata:
+        key, value = re.split(
+            r'=(?=(?:[^"]*"[^"]*")*[^"]*$)',
+            key_value_pair
+        )
 
         match key:
             case "ID":
@@ -46,7 +65,7 @@ def parse_format_string(format_string: str) -> dict:
                 other[key] = value
     
     if any(value is None for value in [id, number, data_type, description]):
-        raise ValueError(f"Missing a metadata value in the FORMAT string {format_string}")
+        raise ValueError(f"Missing a metadata value in the FORMAT string {metadata_string}")
     
     return {
         "ID": id,
@@ -58,19 +77,37 @@ def parse_format_string(format_string: str) -> dict:
 
 
 def parse_vcf_metadata(metadata) -> list[VCFFormatField]:
+    """
+    Parse the VCF metadata
 
-    format_fields = []
+    :param metadata: the metadata from the VCF file
+    :return: the VCF metadata as a list of VCFMetadata objects
+    """
+
+    metadata_fields = {
+        "format_fields": [],
+        "info_fields": [],
+    }
 
     for line in metadata:
         if re.match(r"^##FORMAT", line):
-            
-            format_field_metadata = parse_format_string(line)
-            format_fields.append(VCFFormatField(**format_field_metadata))
+            format_field_metadata = parse_metadata_string(line)
+            metadata_fields["format_fields"].append(VCFFormatField(**format_field_metadata))
 
-    return format_fields
+        if re.match(r"^##INFO", line):
+            info_field_metadata = parse_metadata_string(line)
+            metadata_fields["info_fields"].append(VCFInfoField(**info_field_metadata))
+
+    return metadata_fields
 
 
 def split_vcf(vcf: Union[str, Path]) -> Tuple[list[str], pl.LazyFrame]:
+    """
+    Split the VCF file into metadata and data portions of the file
+
+    :param vcf: the path to the VCF file to split as either a string or Path object
+    :return: a tuple containing the metadata and data portions of the VCF file
+    """
     vcf = Path(vcf)
     
     if isinstance(vcf, Path) and not vcf.exists():
