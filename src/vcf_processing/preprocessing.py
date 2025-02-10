@@ -10,17 +10,7 @@ import polars as pl
 from vcf_processing.models import VCFMetadata, VCFFormatField, VCFInfoField
 
 
-VCF_HEADER = [
-    "#CHROM",
-    "POS",
-    "ID",
-    "REF",
-    "ALT",
-    "QUAL",
-    "FILTER",
-    "INFO",
-    "FORMAT",
-]
+VCF_HEADER = ["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT"]
 
 
 def parse_metadata_string(metadata_string: str) -> dict:
@@ -32,8 +22,7 @@ def parse_metadata_string(metadata_string: str) -> dict:
     """
     if isinstance(metadata_string, str):
         if metadata_string := re.search(
-            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)",
-            metadata_string
+            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)", metadata_string
         ):
             metadata_string = metadata_string.group(1)
         else:
@@ -41,19 +30,13 @@ def parse_metadata_string(metadata_string: str) -> dict:
     else:
         raise TypeError("Expected type str for the VCF metadata string")
 
-    metadata = re.split(
-        r',(?=(?:[^"]*"[^"]*")*[^"]*$)',
-        metadata_string                      
-    )
+    metadata = re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', metadata_string)
 
     id, number, data_type, description = None, None, None, None
     other = {}
 
     for key_value_pair in metadata:
-        key, value = re.split(
-            r'=(?=(?:[^"]*"[^"]*")*[^"]*$)',
-            key_value_pair
-        )
+        key, value = re.split(r'=(?=(?:[^"]*"[^"]*")*[^"]*$)', key_value_pair)
 
         match key:
             case "ID":
@@ -66,10 +49,12 @@ def parse_metadata_string(metadata_string: str) -> dict:
                 description = re.sub(r'"', "", value)
             case _:
                 other[key] = value
-    
+
     if any(value is None for value in [id, number, data_type, description]):
-        raise ValueError(f"Missing a metadata value in the FORMAT string {metadata_string}")
-    
+        raise ValueError(
+            f"Missing a metadata value in the FORMAT string {metadata_string}"
+        )
+
     return {
         "ID": id,
         "Number": number,
@@ -87,15 +72,14 @@ def parse_vcf_metadata(metadata: list[str]) -> dict[str, list[VCFMetadata]]:
     :return: the VCF metadata as a list of VCFMetadata objects
     """
 
-    metadata_fields = {
-        "format_fields": [],
-        "info_fields": [],
-    }
+    metadata_fields = {"format_fields": [], "info_fields": []}
 
     for line in metadata:
         if re.match(r"^##FORMAT", line):
             format_field_metadata = parse_metadata_string(line)
-            metadata_fields["format_fields"].append(VCFFormatField(**format_field_metadata))
+            metadata_fields["format_fields"].append(
+                VCFFormatField(**format_field_metadata)
+            )
 
         if re.match(r"^##INFO", line):
             info_field_metadata = parse_metadata_string(line)
@@ -112,18 +96,12 @@ def read_vcf_metadata(vcf: Union[str, Path]) -> Tuple[list[str], list[str]]:
     :return: a tuple containing the metadata and data portions of the VCF file
     """
     vcf = Path(vcf)
-    
+
     if isinstance(vcf, Path) and not vcf.exists():
         raise ValueError(f"The VCF file {vcf} could not be found")
-    
+
     metadata = subprocess.run(
-        [
-            "bcftools",
-            "head",
-            vcf,
-        ],
-        check=True,
-        capture_output=True,
+        ["bcftools", "head", vcf], check=True, capture_output=True
     ).stdout.decode("utf-8")
 
     metadata, header = metadata.splitlines()[:-1], metadata.splitlines()[-1].split("\t")
@@ -137,7 +115,7 @@ def read_vcf_data(vcf: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
     Read in the VCF data as a polars DataFrame
 
     :param vcf: the path to the VCF file to read in
-    :param len_metadata: the number of metadata lines in the VCF file. used to skip the 
+    :param len_metadata: the number of metadata lines in the VCF file. used to skip the
         metadata since it isn't tab/comma separated
     :return: the VCF data as a polars DataFrame
     """
@@ -146,19 +124,12 @@ def read_vcf_data(vcf: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
     if isinstance(vcf, Path) and not vcf.exists():
         raise ValueError(f"The VCF file {vcf} could not be found")
 
-    vcf_data = pl.read_csv(
-        vcf,
-        skip_rows=len_metadata,
-        separator="\t",
-    )
+    vcf_data = pl.read_csv(vcf, skip_rows=len_metadata, separator="\t")
 
     return vcf_data
 
 
-def vcf_rename(
-    vcf_path: Union[str, Path],
-    sample_rename: dict[str, str],
-) -> None:
+def vcf_rename(vcf_path: Union[str, Path], sample_rename: dict[str, str]) -> None:
     """
     Use bcftools to rename the samples in a VCF file
 
@@ -192,25 +163,11 @@ def vcf_rename(
         ],
         check=True,
     )
-    subprocess.run(
-        [
-            "mv",
-            vcf_path.parent / "tmp.vcf.gz",
-            vcf_path,
-        ]
-    )
+    subprocess.run(["mv", vcf_path.parent / "tmp.vcf.gz", vcf_path])
 
     # need to reindex the VCF after reheadering if it's compressed
     if vcf_path.suffix == ".gz":
-        subprocess.run(
-            [
-                "bcftools",
-                "index",
-                "-f",
-                vcf_path,
-            ],
-            check=True,
-        )
+        subprocess.run(["bcftools", "index", "-f", vcf_path], check=True)
 
     # cleanup the tempfile
     os.remove(sample_rename_file.name)
@@ -219,10 +176,8 @@ def vcf_rename(
 
 
 def make_concat_compatible(
-        temp_dir: Union[str, Path],
-        vcf_1: Union[str, Path],
-        vcf_2: Union[str, Path],
-    ) -> tuple[Path, ...]:
+    temp_dir: Union[str, Path], vcf_1: Union[str, Path], vcf_2: Union[str, Path]
+) -> tuple[Path, ...]:
     """
     Make two VCFs compatible for combining using bcftools concat. BCFTools requires that
     VCFs have the same headers before they can be combined using bcftools concat.
@@ -236,33 +191,25 @@ def make_concat_compatible(
     temp_dir = Path(temp_dir)
     outputs = [
         temp_dir / "vcf_1_compatible.vcf.gz",
-        temp_dir / "vcf_2_compatible.vcf.gz"
+        temp_dir / "vcf_2_compatible.vcf.gz",
     ]
 
-    vcf_1_samples = subprocess.run(
-        [
-            "bcftools",
-            "query",
-            "-l",
-            str(vcf_1),
-        ],
-        check=True,
-        capture_output=True,
-    ).stdout.decode("utf-8").splitlines()
-    vcf_2_samples = subprocess.run(
-        [
-            "bcftools",
-            "query",
-            "-l",
-            str(vcf_2),
-        ],
-        check=True,
-        capture_output=True,
-    ).stdout.decode("utf-8").splitlines()
-
-    shared_samples = set(vcf_1_samples).intersection(
-        set(vcf_2_samples)
+    vcf_1_samples = (
+        subprocess.run(
+            ["bcftools", "query", "-l", str(vcf_1)], check=True, capture_output=True
+        )
+        .stdout.decode("utf-8")
+        .splitlines()
     )
+    vcf_2_samples = (
+        subprocess.run(
+            ["bcftools", "query", "-l", str(vcf_2)], check=True, capture_output=True
+        )
+        .stdout.decode("utf-8")
+        .splitlines()
+    )
+
+    shared_samples = set(vcf_1_samples).intersection(set(vcf_2_samples))
 
     subprocess.run(
         [
@@ -297,11 +244,11 @@ def make_concat_compatible(
 
 
 def vcf_concat(
-        vcf_1_path: Union[str, Path],
-        vcf_2_path: Union[str, Path],
-        temp_dir: Optional[Union[str, Path]] = None,
-        output: Optional[Union[str, Path]] = None,
-        *args,
+    vcf_1_path: Union[str, Path],
+    vcf_2_path: Union[str, Path],
+    temp_dir: Optional[Union[str, Path]] = None,
+    output: Optional[Union[str, Path]] = None,
+    *args,
 ) -> Path:
     """
     Combine two VCF files using bcftools concat
@@ -326,32 +273,13 @@ def vcf_concat(
         args += tuple(["-O", "b"])
 
     vcf_1_compatible, vcf_2_compatible = make_concat_compatible(
-        temp_dir,
-        vcf_1_path,
-        vcf_2_path,
+        temp_dir, vcf_1_path, vcf_2_path
     )
 
     # bcftools concat also requires bgzipped VCFs to be indexed
-    subprocess.run(
-        [
-            "bcftools",
-            "index",
-            "-f",
-            str(vcf_1_compatible),
-        ],
-        check=True,
-    )
-    subprocess.run(
-        [
-            "bcftools",
-            "index",
-            "-f",
-            str(vcf_2_compatible),
-        ],
-        check=True,
-    )
+    subprocess.run(["bcftools", "index", "-f", str(vcf_1_compatible)], check=True)
+    subprocess.run(["bcftools", "index", "-f", str(vcf_2_compatible)], check=True)
 
-    
     subprocess.run(
         [
             "bcftools",
@@ -383,7 +311,7 @@ def vcf_merge(
 
     :params vcf_1_path: path to the first VCF file to merge
     :params vcf_2_path: path to the second VCF file to merge
-    :params sample_rename: a list of dictionaries mapping the sample names in the VCFs to the desired sample names. the 
+    :params sample_rename: a list of dictionaries mapping the sample names in the VCFs to the desired sample names. the
         order of the dictionaries in the list should match the order of the VCFs
     :params temp_dir: the directory to store temporary files in
     :params output: the path to the output merged VCF file
@@ -406,11 +334,11 @@ def vcf_merge(
         if vcf_path.suffix != ".gz":
             subprocess.run(
                 [
-                    "bgzip", 
+                    "bgzip",
                     "-k",
                     str(vcf_path),
                     "-o",
-                    (temp_dir / vcf_path.name).with_suffix(".vcf.gz")
+                    (temp_dir / vcf_path.name).with_suffix(".vcf.gz"),
                 ],
                 check=True,
             )
@@ -421,15 +349,11 @@ def vcf_merge(
 
     # index if not already indexed
     for vcf_path in [vcf_1_path, vcf_2_path]:
-        if not vcf_path.with_suffix(".tbi").exists() and not vcf_path.with_suffix(".csi").exists():
-            subprocess.run(
-                [
-                    "bcftools", 
-                    "index",
-                    vcf_path
-                ],
-                check=True,
-            )
+        if (
+            not vcf_path.with_suffix(".tbi").exists()
+            and not vcf_path.with_suffix(".csi").exists()
+        ):
+            subprocess.run(["bcftools", "index", vcf_path], check=True)
 
     if sample_rename is not None:
 
@@ -439,16 +363,7 @@ def vcf_merge(
             vcf_rename(vcf_path, sample_rename[file_idx])
 
         subprocess.run(
-            [
-                "bcftools",
-                "merge",
-                vcf_1_path,
-                vcf_2_path,
-                "-o",
-                output,
-                "-O",
-                "b",
-            ],
+            ["bcftools", "merge", vcf_1_path, vcf_2_path, "-o", output, "-O", "b"],
             check=True,
         )
 
