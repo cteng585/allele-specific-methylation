@@ -1,3 +1,4 @@
+import os
 import re
 import subprocess
 import tempfile
@@ -246,7 +247,7 @@ def vcf_concat(
     :params vcf_1_path: path to the first VCF file to concat
     :params vcf_2_path: path to the second VCF file to concat
     :params args: additional arguments to pass to bcftools concat
-    :returns: path to the concatenated VCF file
+    :return: path to the concatenated VCF file
     """
 
     # TODO: check that bcftools is installed
@@ -300,5 +301,159 @@ def vcf_concat(
             *args,
         ]
     )
+
+    return output
+
+
+def make_merge_compatible(
+    vcf_1_path: Path, 
+    vcf_2_path: Path, 
+    sample_rename: list[dict[str, str]], 
+    temp_dir: Path,
+) -> None:
+    """
+    Make two VCFs compatible for merging using bcftools merge. If the "--force-samples" flag is not used, the VCFs
+    must have unique sample names
+
+    :param vcf_1_path: the path to the first VCF file to make compatible
+    :param vcf_2_path: the path to the second VCF file to make compatible
+    :param sample_rename: a list of dictionaries mapping the sample names in the VCFs to the desired sample names. the 
+        order of the dictionaries in the list should match the order of the VCFs
+    :param temp_dir: the directory to store temporary files in
+    :return:
+    """
+    for file_idx, vcf_path in enumerate([vcf_1_path, vcf_2_path]):
+        rename_args = "\n".join(
+            [f"{old_name} {new_name}" for old_name, new_name in sample_rename[file_idx].items()]
+        )
+
+        
+        with open(temp_dir / "sample_file.txt", "w") as sample_file:
+            sample_file.write(rename_args)
+            sample_file.close()
+        
+
+        subprocess.run(
+            [
+                "bcftools",
+                "reheader",
+                vcf_path,
+                "-s",
+                sample_file.name,
+                "-o",
+                vcf_path,
+            ],
+            check=True,
+        )
+
+        # need to reindex the VCF after reheadering
+        subprocess.run(
+            [
+                "bcftools",
+                "index",
+                "-f",
+                vcf_path,
+            ],
+            check=True,
+        )
+
+        # cleanup the tempfile
+        os.remove(sample_file.name)
+
+    return
+
+
+def vcf_merge(
+    vcf_1_path: Union[str, Path],
+    vcf_2_path: Union[str, Path],
+    sample_rename: Optional[list[dict[str, str]]] = None,
+    temp_dir: Optional[Union[str, Path]] = None,
+    output: Optional[Union[str, Path]] = None,
+    *args,
+) -> Path:
+    """
+    Merge two VCF files using bcftools merge
+
+    :params vcf_1_path: path to the first VCF file to merge
+    :params vcf_2_path: path to the second VCF file to merge
+    :params sample_rename: a list of dictionaries mapping the sample names in the VCFs to the desired sample names. the 
+        order of the dictionaries in the list should match the order of the VCFs
+    :params temp_dir: the directory to store temporary files in
+    :params output: the path to the output merged VCF file
+    :params args: additional arguments to pass to bcftools
+    :return: path to the merged VCF file
+    """
+    if temp_dir is None:
+        temp_dir = tempfile.TemporaryDirectory()
+    elif not Path(temp_dir).exists():
+        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+
+    vcf_1_path = Path(vcf_1_path)
+    vcf_2_path = Path(vcf_2_path)
+    if output is None:
+        output = temp_dir / "merge.vcf.gz"
+
+    # compress if not already compressed
+    new_paths = []
+    for vcf_path in [vcf_1_path, vcf_2_path]:
+        if vcf_path.suffix != ".gz":
+            subprocess.run(
+                [
+                    "bgzip", 
+                    "-k",
+                    str(vcf_path),
+                    "-o",
+                    (temp_dir / vcf_path.name).with_suffix(".vcf.gz")
+                ],
+                check=True,
+            )
+            new_paths.append((temp_dir / vcf_path.name).with_suffix(".vcf.gz"))
+        else:
+            new_paths.append(vcf_path)
+    vcf_1_path, vcf_2_path = new_paths
+
+    # index if not already indexed
+    for vcf_path in [vcf_1_path, vcf_2_path]:
+        if not vcf_path.with_suffix(".tbi").exists() and not vcf_path.with_suffix(".csi").exists():
+            subprocess.run(
+                [
+                    "bcftools", 
+                    "index",
+                    vcf_path
+                ],
+                check=True,
+            )
+
+    if sample_rename is not None:
+        make_merge_compatible(vcf_1_path, vcf_2_path, sample_rename, temp_dir)
+        subprocess.run(
+            [
+                "bcftools",
+                "merge",
+                vcf_1_path,
+                vcf_2_path,
+                "-o",
+                output,
+                "-O",
+                "b",
+            ],
+            check=True,
+        )
+
+    else:
+        subprocess.run(
+            [
+                "bcftools",
+                "merge",
+                vcf_1_path,
+                vcf_2_path,
+                "-f",
+                "-o",
+                output,
+                "-O",
+                "b",
+            ],
+            check=True,
+        )
 
     return output
