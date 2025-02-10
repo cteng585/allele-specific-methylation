@@ -76,7 +76,7 @@ def parse_metadata_string(metadata_string: str) -> dict:
     }
 
 
-def parse_vcf_metadata(metadata) -> list[VCFFormatField]:
+def parse_vcf_metadata(metadata: list[str]) -> list[VCFFormatField]:
     """
     Parse the VCF metadata
 
