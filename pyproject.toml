@@ -10,3 +10,8 @@ dependencies = [
     "jupyter>=1.1.1",
     "polars>=1.22.0",
 ]
+
+[dependency-groups]
+dev = [
+    "black>=25.1.0",
+]
