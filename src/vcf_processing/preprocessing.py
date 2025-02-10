@@ -155,6 +155,69 @@ def read_vcf_data(vcf: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
     return vcf_data
 
 
+def vcf_rename(
+    vcf_path: Union[str, Path],
+    sample_rename: dict[str, str],
+) -> None:
+    """
+    Use bcftools to rename the samples in a VCF file
+
+    :param vcf_path: the path to the VCF file to rename the samples in
+    :param sample_rename: dictionary mapping the old sample names to the new sample names
+    :return: None
+    """
+    vcf_path = Path(vcf_path)
+
+    if isinstance(vcf_path, Path) and not vcf_path.exists():
+        raise ValueError(f"The VCF file {vcf_path} could not be found")
+
+    sample_rename_file = tempfile.NamedTemporaryFile(delete_on_close=False)
+    sample_rename = "\n".join(
+        [f"{old_name} {new_name}" for old_name, new_name in sample_rename.items()]
+    )
+    sample_rename_file.write(str.encode(sample_rename))
+    sample_rename_file.close()
+
+    # reheadering seems to use a streaming input since indexing a file that has been renamed to the same file name
+    # as the input can cause some sort of buffer error
+    subprocess.run(
+        [
+            "bcftools",
+            "reheader",
+            vcf_path,
+            "-s",
+            sample_rename_file.name,
+            "-o",
+            vcf_path.parent / "tmp.vcf.gz",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "mv",
+            vcf_path.parent / "tmp.vcf.gz",
+            vcf_path,
+        ]
+    )
+
+    # need to reindex the VCF after reheadering if it's compressed
+    if vcf_path.suffix == ".gz":
+        subprocess.run(
+            [
+                "bcftools",
+                "index",
+                "-f",
+                vcf_path,
+            ],
+            check=True,
+        )
+
+    # cleanup the tempfile
+    os.remove(sample_rename_file.name)
+
+    return
+
+
 def make_concat_compatible(
         temp_dir: Union[str, Path],
         vcf_1: Union[str, Path],
@@ -228,10 +291,8 @@ def make_concat_compatible(
         ],
         check=True,
     )
-    
 
     return tuple(outputs)
-
 
 
 def vcf_concat(
@@ -305,64 +366,6 @@ def vcf_concat(
     return output
 
 
-def make_merge_compatible(
-    vcf_1_path: Path, 
-    vcf_2_path: Path, 
-    sample_rename: list[dict[str, str]], 
-    temp_dir: Path,
-) -> None:
-    """
-    Make two VCFs compatible for merging using bcftools merge. If the "--force-samples" flag is not used, the VCFs
-    must have unique sample names
-
-    :param vcf_1_path: the path to the first VCF file to make compatible
-    :param vcf_2_path: the path to the second VCF file to make compatible
-    :param sample_rename: a list of dictionaries mapping the sample names in the VCFs to the desired sample names. the 
-        order of the dictionaries in the list should match the order of the VCFs
-    :param temp_dir: the directory to store temporary files in
-    :return:
-    """
-    for file_idx, vcf_path in enumerate([vcf_1_path, vcf_2_path]):
-        rename_args = "\n".join(
-            [f"{old_name} {new_name}" for old_name, new_name in sample_rename[file_idx].items()]
-        )
-
-        
-        with open(temp_dir / "sample_file.txt", "w") as sample_file:
-            sample_file.write(rename_args)
-            sample_file.close()
-        
-
-        subprocess.run(
-            [
-                "bcftools",
-                "reheader",
-                vcf_path,
-                "-s",
-                sample_file.name,
-                "-o",
-                vcf_path,
-            ],
-            check=True,
-        )
-
-        # need to reindex the VCF after reheadering
-        subprocess.run(
-            [
-                "bcftools",
-                "index",
-                "-f",
-                vcf_path,
-            ],
-            check=True,
-        )
-
-        # cleanup the tempfile
-        os.remove(sample_file.name)
-
-    return
-
-
 def vcf_merge(
     vcf_1_path: Union[str, Path],
     vcf_2_path: Union[str, Path],
@@ -425,7 +428,12 @@ def vcf_merge(
             )
 
     if sample_rename is not None:
-        make_merge_compatible(vcf_1_path, vcf_2_path, sample_rename, temp_dir)
+
+        # rename samples using bcftools merge so that all samples between files being merged are unique
+        # this is required if the `--force-samples` flag is not used
+        for file_idx, vcf_path in enumerate([vcf_1_path, vcf_2_path]):
+            vcf_rename(vcf_path, sample_rename[file_idx])
+
         subprocess.run(
             [
                 "bcftools",
