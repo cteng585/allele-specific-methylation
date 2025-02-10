@@ -1,4 +1,5 @@
 import re
+import subprocess
 from pathlib import Path
 from typing import Tuple, Union
 
@@ -101,7 +102,7 @@ def parse_vcf_metadata(metadata: list[str]) -> list[VCFFormatField]:
     return metadata_fields
 
 
-def split_vcf(vcf: Union[str, Path]) -> Tuple[list[str], pl.LazyFrame]:
+def vcf_split(vcf: Union[str, Path]) -> Tuple[list[str], pl.LazyFrame]:
     """
     Split the VCF file into metadata and data portions of the file
 
@@ -113,21 +114,95 @@ def split_vcf(vcf: Union[str, Path]) -> Tuple[list[str], pl.LazyFrame]:
     if isinstance(vcf, Path) and not vcf.exists():
         raise ValueError(f"The VCF file {vcf} could not be found")
     
-    metadata = []
-    with open(vcf) as infile:
-        while True:
-            line = infile.readline()
-            
-            # read until hitting the data header
-            if re.match(r"^#CHROM", line):
-                break
-            else:
-                metadata.append(line)
+    metadata = subprocess.run(
+        [
+            "bcftools",
+            "head",
+            vcf,
+        ]
+    )
     
     data = pl.scan_csv(
         vcf,
         separator="\t",
-        skip_lines=len(metadata),
+        skip_lines=len(metadata) - 1,
     )
 
     return metadata, data
+
+
+def vcf_concat(
+        vcf_1_path: Union[str, Path],
+        vcf_2_path: Union[str, Path],
+        *args: str,
+) -> Path:
+    """
+    Combine two VCF files using bcftools concat
+
+    :params vcf_1_path: path to the first VCF file to concat
+    :params vcf_2_path: path to the second VCF file to concat
+    :params args: additional arguments to pass to bcftools concat
+    :returns: path to the concatenated VCF file
+    """
+
+    # TODO: check that bcftools is installed
+
+    temp_dir  = Path(vcf_1_path).parent
+    vcf_1_path = Path(vcf_1_path)
+    vcf_2_path = Path(vcf_2_path)
+
+    # bcftools concat requires bgzipped VCFs
+    if not vcf_1_path.with_suffix(".vcf.gz").exists():
+        subprocess.run(
+            [
+                "bgzip",
+                "-f",
+                str(vcf_1_path),
+            ],
+            check=True,
+        )
+    if not vcf_2_path.with_suffix(".vcf.gz").exists():
+        subprocess.run(
+            [
+                "bgzip",
+                "-f",
+                str(vcf_2_path),
+            ],
+            check=True,
+        )
+
+    # bcftools concat also requires bgzipped VCFs to be indexed
+    subprocess.run(
+        [
+            "bcftools",
+            "index",
+            "-f",
+            str(vcf_1_path.with_suffix(".vcf.gz")),
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "bcftools",
+            "index",
+            "-f",
+            str(vcf_2_path.with_suffix(".vcf.gz")),
+        ],
+        check=True,
+    )
+
+    
+    subprocess.run(
+        [
+            "bcftools",
+            "concat",
+            "-a",
+            vcf_1_path.with_suffix(".vcf.gz"),
+            vcf_2_path.with_suffix(".vcf.gz"),
+            "-o",
+            temp_dir / "concat.vcf.gz",
+            *args,
+        ]
+    )
+
+    return temp_dir / "concat.vcf.gz"
