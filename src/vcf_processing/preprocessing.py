@@ -1,7 +1,8 @@
 import re
 import subprocess
+import tempfile
 from pathlib import Path
-from typing import Tuple, Union
+from typing import Optional, Tuple, Union
 
 import polars as pl
 
@@ -102,9 +103,9 @@ def parse_vcf_metadata(metadata: list[str]) -> list[VCFFormatField]:
     return metadata_fields
 
 
-def vcf_split(vcf: Union[str, Path]) -> Tuple[list[str], pl.LazyFrame]:
+def read_vcf_metadata(vcf: Union[str, Path]) -> Tuple[list[str], list[str]]:
     """
-    Split the VCF file into metadata and data portions of the file
+    Read in the VCF non-data lines and split into the metadata and header portions
 
     :param vcf: the path to the VCF file to split as either a string or Path object
     :return: a tuple containing the metadata and data portions of the VCF file
@@ -119,22 +120,125 @@ def vcf_split(vcf: Union[str, Path]) -> Tuple[list[str], pl.LazyFrame]:
             "bcftools",
             "head",
             vcf,
-        ]
-    )
-    
-    data = pl.scan_csv(
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8")
+
+    metadata, header = metadata.splitlines()[:-1], metadata.splitlines()[-1].split("\t")
+
+    return metadata, header
+
+
+# TODO: add support for compressed VCF
+def read_vcf_data(vcf: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
+    """
+    Read in the VCF data as a polars DataFrame
+
+    :param vcf: the path to the VCF file to read in
+    :param len_metadata: the number of metadata lines in the VCF file. used to skip the 
+        metadata since it isn't tab/comma separated
+    :return: the VCF data as a polars DataFrame
+    """
+    vcf = Path(vcf)
+
+    if isinstance(vcf, Path) and not vcf.exists():
+        raise ValueError(f"The VCF file {vcf} could not be found")
+
+    vcf_data = pl.read_csv(
         vcf,
+        skip_rows=len_metadata,
         separator="\t",
-        skip_lines=len(metadata) - 1,
     )
 
-    return metadata, data
+    return vcf_data
+
+
+def make_concat_compatible(
+        temp_dir: Union[str, Path],
+        vcf_1: Union[str, Path],
+        vcf_2: Union[str, Path],
+    ):
+    """
+    Make two VCFs compatible for combining using bcftools concat. BCFTools requires that
+    VCFs have the same headers before they can be combined using bcftools concat.
+
+    :param vcf_1: the path to the first VCF file to make compatible
+    :param vcf_2: the path to the second VCF file to make compatible
+    :return: VCFs that are compatible for combining using bcftools concat by subsetting the samples present in each
+    """
+
+    temp_dir = Path(temp_dir)
+    outputs = [
+        temp_dir / "vcf_1_compatible.vcf.gz",
+        temp_dir / "vcf_2_compatible.vcf.gz",
+    ]
+
+    vcf_1_samples = subprocess.run(
+        [
+            "bcftools",
+            "query",
+            "-l",
+            str(vcf_1),
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8").splitlines()
+    vcf_2_samples = subprocess.run(
+        [
+            "bcftools",
+            "query",
+            "-l",
+            str(vcf_2),
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8").splitlines()
+
+    shared_samples = set(vcf_1_samples).intersection(
+        set(vcf_2_samples)
+    )
+
+    subprocess.run(
+        [
+            "bcftools",
+            "view",
+            "-s",
+            ",".join(shared_samples),
+            str(vcf_1),
+            "-o",
+            outputs[0],
+            "-O",
+            "b",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        [
+            "bcftools",
+            "view",
+            "-s",
+            ",".join(shared_samples),
+            str(vcf_2),
+            "-o",
+            outputs[1],
+            "-O",
+            "b",
+        ],
+        check=True,
+    )
+    
+
+    return tuple(outputs)
+
 
 
 def vcf_concat(
         vcf_1_path: Union[str, Path],
         vcf_2_path: Union[str, Path],
-        *args: str,
+        temp_dir: Optional[Union[str, Path]] = None,
+        output: Optional[Union[str, Path]] = None,
+        *args,
 ) -> Path:
     """
     Combine two VCF files using bcftools concat
@@ -147,29 +251,21 @@ def vcf_concat(
 
     # TODO: check that bcftools is installed
 
-    temp_dir  = Path(vcf_1_path).parent
+    if temp_dir is None:
+        temp_dir = tempfile.TemporaryDirectory()
+    elif not Path(temp_dir).exists():
+        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+
     vcf_1_path = Path(vcf_1_path)
     vcf_2_path = Path(vcf_2_path)
+    if output is None:
+        output = temp_dir / "concat.vcf.gz"
 
-    # bcftools concat requires bgzipped VCFs
-    if not vcf_1_path.with_suffix(".vcf.gz").exists():
-        subprocess.run(
-            [
-                "bgzip",
-                "-f",
-                str(vcf_1_path),
-            ],
-            check=True,
-        )
-    if not vcf_2_path.with_suffix(".vcf.gz").exists():
-        subprocess.run(
-            [
-                "bgzip",
-                "-f",
-                str(vcf_2_path),
-            ],
-            check=True,
-        )
+    vcf_1_compatible, vcf_2_compatible = make_concat_compatible(
+        temp_dir,
+        vcf_1_path,
+        vcf_2_path,
+    )
 
     # bcftools concat also requires bgzipped VCFs to be indexed
     subprocess.run(
@@ -177,7 +273,7 @@ def vcf_concat(
             "bcftools",
             "index",
             "-f",
-            str(vcf_1_path.with_suffix(".vcf.gz")),
+            str(vcf_1_compatible),
         ],
         check=True,
     )
@@ -186,7 +282,7 @@ def vcf_concat(
             "bcftools",
             "index",
             "-f",
-            str(vcf_2_path.with_suffix(".vcf.gz")),
+            str(vcf_2_compatible),
         ],
         check=True,
     )
@@ -197,12 +293,12 @@ def vcf_concat(
             "bcftools",
             "concat",
             "-a",
-            vcf_1_path.with_suffix(".vcf.gz"),
-            vcf_2_path.with_suffix(".vcf.gz"),
+            str(vcf_1_compatible),
+            str(vcf_2_compatible),
             "-o",
-            temp_dir / "concat.vcf.gz",
+            output,
             *args,
         ]
     )
 
-    return temp_dir / "concat.vcf.gz"
+    return output
