@@ -3,11 +3,11 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Union
+from typing import Optional, Tuple, Union, Any
 
 import polars as pl
 
-from vcf_processing.models import VCFFormatField, VCFInfoField
+from vcf_processing.models import VCFMetadata, VCFFormatField, VCFInfoField
 
 
 VCF_HEADER = [
@@ -32,7 +32,7 @@ def parse_metadata_string(metadata_string: str) -> dict:
     """
     if isinstance(metadata_string, str):
         if metadata_string := re.search(
-            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)", 
+            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)",
             metadata_string
         ):
             metadata_string = metadata_string.group(1)
@@ -79,7 +79,7 @@ def parse_metadata_string(metadata_string: str) -> dict:
     }
 
 
-def parse_vcf_metadata(metadata: list[str]) -> list[VCFFormatField]:
+def parse_vcf_metadata(metadata: list[str]) -> dict[str, list[VCFMetadata]]:
     """
     Parse the VCF metadata
 
@@ -222,11 +222,12 @@ def make_concat_compatible(
         temp_dir: Union[str, Path],
         vcf_1: Union[str, Path],
         vcf_2: Union[str, Path],
-    ):
+    ) -> tuple[Path, ...]:
     """
     Make two VCFs compatible for combining using bcftools concat. BCFTools requires that
     VCFs have the same headers before they can be combined using bcftools concat.
 
+    :param temp_dir: the (temporary) directory to store working files in
     :param vcf_1: the path to the first VCF file to make compatible
     :param vcf_2: the path to the second VCF file to make compatible
     :return: VCFs that are compatible for combining using bcftools concat by subsetting the samples present in each
@@ -235,7 +236,7 @@ def make_concat_compatible(
     temp_dir = Path(temp_dir)
     outputs = [
         temp_dir / "vcf_1_compatible.vcf.gz",
-        temp_dir / "vcf_2_compatible.vcf.gz",
+        temp_dir / "vcf_2_compatible.vcf.gz"
     ]
 
     vcf_1_samples = subprocess.run(
@@ -322,6 +323,7 @@ def vcf_concat(
     vcf_2_path = Path(vcf_2_path)
     if output is None:
         output = temp_dir / "concat.vcf.gz"
+        args += tuple(["-O", "b"])
 
     vcf_1_compatible, vcf_2_compatible = make_concat_compatible(
         temp_dir,
@@ -360,7 +362,9 @@ def vcf_concat(
             "-o",
             output,
             *args,
-        ]
+        ],
+        check=True,
+        capture_output=True,
     )
 
     return output
