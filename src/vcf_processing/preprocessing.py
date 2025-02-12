@@ -3,7 +3,7 @@ import re
 import subprocess
 import tempfile
 from pathlib import Path
-from typing import Optional, Tuple, Union, Any
+from typing import Optional, Tuple, Union
 
 import polars as pl
 
@@ -269,7 +269,7 @@ def vcf_concat(
     vcf_1_path = Path(vcf_1_path)
     vcf_2_path = Path(vcf_2_path)
     if output is None:
-        output = temp_dir / "concat.vcf.gz"
+        output = Path(temp_dir) / "concat.vcf.gz"
         args += tuple(["-O", "b"])
 
     vcf_1_compatible, vcf_2_compatible = make_concat_compatible(
@@ -326,7 +326,7 @@ def vcf_merge(
     vcf_1_path = Path(vcf_1_path)
     vcf_2_path = Path(vcf_2_path)
     if output is None:
-        output = temp_dir / "merge.vcf.gz"
+        output = Path(temp_dir) / "merge.vcf.gz"
 
     # compress if not already compressed
     new_paths = []
@@ -338,11 +338,11 @@ def vcf_merge(
                     "-k",
                     str(vcf_path),
                     "-o",
-                    (temp_dir / vcf_path.name).with_suffix(".vcf.gz"),
+                    (Path(temp_dir) / vcf_path.name).with_suffix(".vcf.gz"),
                 ],
                 check=True,
             )
-            new_paths.append((temp_dir / vcf_path.name).with_suffix(".vcf.gz"))
+            new_paths.append((Path(temp_dir) / vcf_path.name).with_suffix(".vcf.gz"))
         else:
             new_paths.append(vcf_path)
     vcf_1_path, vcf_2_path = new_paths
@@ -379,6 +379,7 @@ def vcf_merge(
                 output,
                 "-O",
                 "b",
+                *args,
             ],
             check=True,
         )
