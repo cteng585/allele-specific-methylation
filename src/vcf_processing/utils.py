@@ -35,7 +35,5 @@ def subset(vcf: VCF, samples: Union[str, list[str]], subset_path: Optional[str, 
     )
 
     subset_vcf = VCF(subset_path)
-    subset_vcf.compressed = True
-    subset_vcf.index()
 
     return subset_vcf

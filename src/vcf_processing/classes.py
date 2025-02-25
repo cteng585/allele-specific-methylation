@@ -17,11 +17,13 @@ class VCF:
         self.path = Path(self.path)
         if not self.path.exists():
             raise ValueError(f"The VCF file {self.path} could not be found")
-        if self.path.suffix == ".gz":
-            if not self._compressed:
+
+        if self.path.suffix == ".gz" and not self._compressed:
+            if not self._test_compression():
                 self.compress()
                 self.index()
-            self._compressed = True
+            else:
+                self._compressed = True
 
     @property
     def compressed(self):
@@ -65,6 +67,19 @@ class VCF:
             capture_output=True,
         ).stdout.decode("utf-8").strip().split("\n")
 
+    def _test_compression(self):
+        if subprocess.run(
+            [
+                "bgzip",
+                "-t",
+                self.path
+            ],
+            capture_output=True,
+        ).stderr:
+            return False
+        else:
+            return True
+
     def compress(self) -> None:
         if self.path.suffix == ".gz" or self._compressed:
             return
@@ -76,6 +91,7 @@ class VCF:
             ],
             check=True
         )
+        self._compressed = True
         self.index()
 
     def index(self) -> None:
@@ -117,7 +133,6 @@ class VCF:
         )
         subprocess.run(["mv", self.path.parent / "tmp.vcf.gz", self.path])
         self._reheadered = True
-        self._indexed = False
         self.index()
 
         # cleanup the tempfile
