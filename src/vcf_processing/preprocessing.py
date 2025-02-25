@@ -175,6 +175,91 @@ def vcf_rename(vcf_path: Union[str, Path], sample_rename: dict[str, str]) -> Non
     return
 
 
+def vcf_compress(
+        vcf_path: Union[str, Path],
+        compressed_path: Union[str, Path],
+) -> None:
+    """
+    Use bgzip to compress the VCF file
+
+    :param vcf_path: the path to the VCF file to compress
+    :param compressed_path: the path to the compressed VCF file
+    :return:
+    """
+    vcf_path = Path(vcf_path)
+
+    if vcf_path.suffix == ".gz":
+        return
+
+    subprocess.run(
+        [
+            "bgzip",
+            "-k",
+            str(vcf_path),
+            "-o",
+            compressed_path,
+        ],
+        check=True,
+    )
+    return
+
+
+def vcf_subset(
+    vcf_path: Union[str, Path],
+    subset_path: Union[str, Path],
+    samples: Union[str, list[str]],
+    *args,
+):
+    """
+    Use bcftools to subset the VCF file
+
+    :param vcf_path: the path to the VCF file to subset
+    :param subset_path: the path to the output from subsetting
+    :param samples: the samples to include in the subset
+    :return:
+    """
+    if Path(subset_path).suffix == ".gz":
+        compress = True
+    else:
+        compress = False
+
+    if compress:
+        subprocess.run(
+            [
+                "bcftools",
+                "view",
+                vcf_path,
+                "-s",
+                samples if isinstance(samples, str) else ",".join(samples),
+                "-o",
+                subset_path,
+                "-O",
+                "b",
+                *args,
+            ],
+            check=True,
+        )
+        subprocess.run(
+            ["bcftools", "index", "-f", subset_path],
+            check=True,
+        )
+    else:
+        subprocess.run(
+            [
+                "bcftools",
+                "view",
+                vcf_path,
+                "-s",
+                samples if isinstance(samples, str) else ",".join(samples),
+                "-o",
+                subset_path,
+                *args,
+            ],
+            check=True,
+        )
+    return
+
+
 def make_concat_compatible(
     temp_dir: Union[str, Path], vcf_1: Union[str, Path], vcf_2: Union[str, Path]
 ) -> tuple[Path, ...]:
