@@ -91,6 +91,7 @@ class VCF:
             ],
             check=True
         )
+        self.path = self.path.with_suffix(".gz")
         self._compressed = True
         self.index()
 
