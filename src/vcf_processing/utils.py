@@ -1,11 +1,11 @@
 import subprocess
 from pathlib import Path
-from typing import Union
+from typing import Optional, Union
 
 from src.vcf_processing.classes import VCF
 
 
-def subset(vcf: VCF, samples: Union[str, list[str]]) -> VCF:
+def subset(vcf: VCF, samples: Union[str, list[str]], subset_path: Optional[str, Path]) -> VCF:
     """
     Use bcftools to subset the VCF file
 
@@ -13,8 +13,11 @@ def subset(vcf: VCF, samples: Union[str, list[str]]) -> VCF:
     :param samples: the samples of the VCF to include in the subset
     :return: a new VCF object with the subsetted samples
     """
-    subset_string = ".".join(samples)
-    subset_path = Path(vcf.path.stem).with_suffix(f".{subset_string}.vcf.gz")
+    if not subset_path:
+        subset_string = ".".join(samples)
+        subset_path = Path(vcf.path.stem).with_suffix(f".{subset_string}.vcf.gz")
+    else:
+        subset_path = Path(subset_path)
 
     subprocess.run(
         [
@@ -32,6 +35,7 @@ def subset(vcf: VCF, samples: Union[str, list[str]]) -> VCF:
     )
 
     subset_vcf = VCF(subset_path)
+    subset_vcf.compressed = True
     subset_vcf.index()
 
     return subset_vcf

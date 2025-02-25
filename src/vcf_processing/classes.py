@@ -17,19 +17,31 @@ class VCF:
         self.path = Path(self.path)
         if not self.path.exists():
             raise ValueError(f"The VCF file {self.path} could not be found")
-        return
+        if self.path.suffix == ".gz":
+            if not self._compressed:
+                self.compress()
+                self.index()
+            self._compressed = True
 
     @property
     def compressed(self):
         return self._compressed
 
+    @compressed.setter
+    def compressed(self, value: bool):
+        self._compressed = value
+
     @property
     def compressed_index(self):
-        if self.compressed:
+        if self.compressed and self.indexed:
             return self.path.with_suffix(".csi")
-        else:
+        elif not self.compressed:
             raise FileNotFoundError(
                 "The VCF file is not compressed and therefore does not have an index"
+            )
+        else:
+            raise FileNotFoundError(
+                "The VCF file is compressed but does not have an index"
             )
 
     @property
