@@ -374,7 +374,6 @@ def vcf_merge(
                 "merge",
                 vcf_1_path,
                 vcf_2_path,
-                "-f",
                 "-o",
                 output,
                 "-O",
@@ -383,5 +382,160 @@ def vcf_merge(
             ],
             check=True,
         )
+
+    return output
+
+
+def ragged_concat(
+    vcf_1_path: Union[str, Path],
+    vcf_2_path: Union[str, Path],
+    sample_rename: Optional[list[dict[str, str]]] = None,
+    temp_dir: Optional[Union[str, Path]] = None,
+    output: Optional[Union[str, Path]] = None,
+):
+    if temp_dir is None:
+        temp_dir = tempfile.TemporaryDirectory()
+    elif not Path(temp_dir).exists():
+        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+
+    vcf_1_path = Path(vcf_1_path)
+    vcf_2_path = Path(vcf_2_path)
+    if output is None:
+        output = Path(temp_dir) / "ragged_concat.vcf.gz"
+
+    # compress if not already compressed
+    new_paths = []
+    for vcf_path in [vcf_1_path, vcf_2_path]:
+        if vcf_path.suffix != ".gz":
+            compressed_path = (Path(temp_dir) / vcf_path.name).with_suffix(".vcf.gz")
+            vcf_compress(vcf_path, compressed_path)
+            new_paths.append(compressed_path)
+        else:
+            new_paths.append(vcf_path)
+    vcf_1_path, vcf_2_path = new_paths
+
+    # index if not already indexed
+    for vcf_path in [vcf_1_path, vcf_2_path]:
+        if (
+                not vcf_path.with_suffix(".tbi").exists()
+                and not vcf_path.with_suffix(".csi").exists()
+        ):
+            subprocess.run(["bcftools", "index", vcf_path], check=True)
+
+    if sample_rename is not None:
+
+        # rename samples using bcftools merge so that all samples between files being merged are unique
+        # this is required if the `--force-samples` flag is not used
+        for file_idx, vcf_path in enumerate([vcf_1_path, vcf_2_path]):
+            vcf_rename(vcf_path, sample_rename[file_idx])
+
+    # get the samples that are common between the two vcf files
+    # concat the common samples
+    # merge anything remaining
+    samples_1 = subprocess.run(
+        [
+            "bcftools",
+            "query",
+            "-l",
+            vcf_1_path,
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8").strip().split("\n")
+
+    samples_2 = subprocess.run(
+        [
+            "bcftools",
+            "query",
+            "-l",
+            vcf_2_path,
+        ],
+        check=True,
+        capture_output=True,
+    ).stdout.decode("utf-8").strip().split("\n")
+
+    to_concat = sorted(
+        list(
+            set(samples_1).intersection(set(samples_2))
+        )
+    )
+    to_merge = sorted(
+        list(
+            set(samples_1).symmetric_difference(set(samples_2))
+        )
+    )
+
+    for idx, vcf_path in enumerate([vcf_1_path, vcf_2_path]):
+        vcf_subset(
+            vcf_path,
+            Path(temp_dir) / f"concat_component_{idx}.vcf.gz",
+            list(to_concat),
+        )
+
+        vcf_subset(
+            vcf_path,
+            Path(temp_dir) / f"merge_component_{idx}.vcf.gz",
+            list(to_merge),
+            "--force-samples",
+        )
+
+    subprocess.run(
+        [
+            "bcftools",
+            "concat",
+            "-a",
+            Path(temp_dir) / f"concat_component_0.vcf.gz",
+            Path(temp_dir) / f"concat_component_1.vcf.gz",
+            "-o",
+            Path(temp_dir) / "concat.vcf.gz",
+            "-O",
+            "b",
+        ],
+        check=True,
+    )
+    subprocess.run(
+        ["bcftools", "index", "-f", Path(temp_dir) / "concat.vcf.gz"], check=True,
+    )
+
+    for vcf_path in ["merge_component_0.vcf.gz", "merge_component_1.vcf.gz"]:
+        samples = subprocess.run(
+            ["bcftools", "query", "-l", Path(temp_dir) / vcf_path], check=True, capture_output=True
+        ).stdout.decode("utf-8")
+
+        if samples:
+            if output.exists():
+                subprocess.run(
+                    [
+                        "bcftools",
+                        "merge",
+                        str(output),
+                        str(Path(temp_dir) / vcf_path),
+                        "-o",
+                        Path(temp_dir) / "ragged_concat.temp.vcf.gz",
+                        "-O",
+                        "b",
+                    ],
+                    check=True,
+                )
+                subprocess.run(
+                    ["mv", Path(temp_dir) / "ragged_concat.temp.vcf.gz", output],
+                )
+            else:
+                subprocess.run(
+                    [
+                        "bcftools",
+                        "merge",
+                        Path(temp_dir) / "concat.vcf.gz",
+                        Path(temp_dir) / vcf_path,
+                        "-o",
+                        output,
+                        "-O",
+                        "b",
+                    ],
+                    check=True,
+                )
+            subprocess.run(
+                ["bcftools", "index", "-f", output], check=True,
+            )
 
     return output
