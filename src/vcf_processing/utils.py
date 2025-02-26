@@ -24,7 +24,7 @@ def subset(
         subset_string = ".".join(
             [sample for sample in samples if sample in vcf.samples]
         )
-        subset_path = Path(vcf.path.stem).with_suffix(
+        subset_path = Path(vcf.path.parent / vcf.path.stem).with_suffix(
             f".{subset_string}.vcf.gz" if subset_string else ".empty.vcf.gz"
         )
     else:
