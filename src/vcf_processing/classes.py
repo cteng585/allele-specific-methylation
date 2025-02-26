@@ -21,17 +21,19 @@ class VCF:
         if self.path.suffix == ".gz" and not self._compressed:
             if not self._test_compression():
                 self.compress()
+            if not Path(self.path.parent / (self.path.name + ".vcf.gz.csi")).exists():
                 self.index()
-            else:
-                self._compressed = True
+            if not self.compressed:
+                self.compressed = True
 
     @property
     def compressed(self):
         return self._compressed
 
     @compressed.setter
-    def compressed(self, value: bool):
+    def compressed(self, value: bool) -> None:
         self._compressed = value
+        return
 
     @property
     def compressed_index(self):
@@ -80,20 +82,39 @@ class VCF:
         else:
             return True
 
-    def compress(self) -> None:
-        if self.path.suffix == ".gz" or self._compressed:
+    def compress(self, output: Optional[Union[str, Path]] = None) -> None:
+        if self.path.suffix == ".gz" or self.compressed:
+            warnings.warn(
+                "The VCF file is already compressed, not compressing again or generating a new file",
+                UserWarning
+            )
             return
 
-        subprocess.run(
-            [
-                "bgzip",
-                self.path,
-            ],
-            check=True
-        )
-        self.path = self.path.with_suffix(".gz")
-        self._compressed = True
+        if not output:
+            subprocess.run(
+                [
+                    "bgzip",
+                    self.path,
+                ],
+                check=True
+            )
+            self.path = self.path.with_suffix(".vcf.gz")
+        else:
+            subprocess.run(
+                [
+                    "bgzip",
+                    self.path,
+                    "-k",
+                    "-o",
+                    output,
+                ],
+                check=True
+            )
+            self.path = output
+
+        self.compressed = True
         self.index()
+        return
 
     def index(self) -> None:
         subprocess.run(
