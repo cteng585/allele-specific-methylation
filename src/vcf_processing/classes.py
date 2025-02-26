@@ -59,7 +59,7 @@ class VCF:
 
     @property
     def samples(self) -> list[str]:
-        return subprocess.run(
+        sample_query = subprocess.run(
         [
                 "bcftools",
                 "query",
@@ -69,6 +69,11 @@ class VCF:
             check=True,
             capture_output=True,
         ).stdout.decode("utf-8").strip().split("\n")
+
+        if [sample for sample in sample_query if sample]:
+            return sample_query
+        else:
+            return []
 
     def _test_compression(self):
         if subprocess.run(

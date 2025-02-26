@@ -130,22 +130,32 @@ def read_vcf_data(vcf: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
     return vcf_data
 
 
+def _setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
+    if temp_dir is None:
+        temp_dir = tempfile.TemporaryDirectory()
+        temp_dir_path = Path(temp_dir.name)
+    elif not Path(temp_dir).exists():
+        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+        temp_dir_path = Path(temp_dir)
+    else:
+        temp_dir_path = Path(temp_dir)
+    return temp_dir_path
+
+
 def make_concat_compatible(
-    temp_dir: Union[str, Path], vcf_1: VCF, vcf_2: VCF
+    temp_dir_path: Path, vcf_1: VCF, vcf_2: VCF
 ) -> tuple[VCF, VCF]:
     """
     Make two VCFs compatible for combining using bcftools concat. BCFTools requires that
     VCFs have the same headers before they can be combined using bcftools concat.
 
-    :param temp_dir: the (temporary) directory to store working files in
+    :param temp_dir_path: the path to the (temporary) directory to store working files in
     :param vcf_1: the first VCF to make compatible for concatenation
     :param vcf_2: the second VCF file to make compatible for concatenation
     :return: VCFs that are compatible for combining using `bcftools concat`
     """
-
-    temp_dir = Path(temp_dir)
-    vcf_1_compatible = temp_dir / "vcf_1_compatible.vcf.gz"
-    vcf_2_compatible = temp_dir / "vcf_2_compatible.vcf.gz"
+    vcf_1_compatible = temp_dir_path / "vcf_1_compatible.vcf.gz"
+    vcf_2_compatible = temp_dir_path / "vcf_2_compatible.vcf.gz"
 
     shared_samples = set(vcf_1.samples).intersection(set(vcf_2.samples))
 
@@ -170,22 +180,23 @@ def vcf_concat(
     :params args: additional arguments to pass to bcftools concat
     :return: the concatenated VCF object
     """
-    if temp_dir is None:
-        temp_dir = tempfile.TemporaryDirectory()
-    elif not Path(temp_dir).exists():
-        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+    temp_dir_path = _setup_workspace(temp_dir)
 
     vcf_1 = VCF(vcf_1_path)
     vcf_2 = VCF(vcf_2_path)
     if output is None:
-        output = Path(temp_dir) / "concat.vcf.gz"
+        if temp_dir is None:
+            output = Path("concat.vcf.gz")
+        else:
+            output = Path(temp_dir_path / "concat.vcf.gz")
         args += tuple(["-O", "b"])
 
     vcf_1_compatible, vcf_2_compatible = make_concat_compatible(
-        temp_dir, vcf_1, vcf_2
+        temp_dir_path, vcf_1, vcf_2
     )
 
     try:
+        # concatenation requires that the two VCFs be compressed
         subprocess.run(
             [
                 "bcftools",
@@ -225,21 +236,21 @@ def vcf_merge(
     :params args: additional arguments to pass to bcftools
     :return: the merged VCF object
     """
-    if temp_dir is None:
-        temp_dir = tempfile.TemporaryDirectory()
-    elif not Path(temp_dir).exists():
-        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+    temp_dir_path = _setup_workspace(temp_dir)
 
     vcf_1 = VCF(vcf_1_path)
     vcf_2 = VCF(vcf_2_path)
     if output is None:
-        output = Path(temp_dir) / "merge.vcf.gz"
+        if temp_dir is None:
+            output = Path("merge.vcf.gz")
+        else:
+            output = Path(temp_dir_path / "merge.vcf.gz")
 
     # TODO: might not need to compress just to merge; this is a significant portion of runtime
     # compress if not already compressed
     for vcf in [vcf_1, vcf_2]:
         if not vcf.compressed:
-            vcf.compress(Path(temp_dir / vcf.path.name).with_suffix(".vcf.gz"))
+            vcf.compress(Path(temp_dir_path / vcf.path.name).with_suffix(".vcf.gz"))
 
     # TODO: consider making placeholder files with samples renamed for the merge
     if sample_rename is not None:
@@ -264,20 +275,20 @@ def ragged_concat(
     temp_dir: Optional[Union[str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
 ) -> VCF:
-    if temp_dir is None:
-        temp_dir = tempfile.TemporaryDirectory()
-    elif not Path(temp_dir).exists():
-        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+    temp_dir_path = _setup_workspace(temp_dir)
 
     vcf_1 = VCF(vcf_1_path)
     vcf_2 = VCF(vcf_2_path)
     if output is None:
-        output = Path(temp_dir) / "ragged_concat.vcf.gz"
+        if temp_dir is None:
+            output = Path("ragged_concat.vcf.gz")
+        else:
+            output = Path(temp_dir_path / "ragged_concat.vcf.gz")
 
     # compress if not already compressed
     for vcf in [vcf_1, vcf_2]:
         if not vcf.compressed:
-            vcf.compress(Path(temp_dir / vcf.path.name).with_suffix(".vcf.gz"))
+            vcf.compress(Path(temp_dir_path / vcf.path.name).with_suffix(".vcf.gz"))
 
     if sample_rename is not None:
 
@@ -309,6 +320,7 @@ def ragged_concat(
     vcf_1_ragged_subset = vcf_subset(vcf_1, to_merge, force=True)
     vcf_2_ragged_subset = vcf_subset(vcf_2, to_merge, force=True)
 
+    concat_vcf_path = temp_dir_path / "concat.vcf.gz"
     subprocess.run(
         [
             "bcftools",
@@ -317,13 +329,13 @@ def ragged_concat(
             vcf_1_common_subset.path,
             vcf_2_common_subset.path,
             "-o",
-            Path(temp_dir) / "concat.vcf.gz",
+            concat_vcf_path,
             "-O",
             "b",
         ],
         check=True,
     )
-    concat_vcf = VCF(Path(temp_dir) / "concat.vcf.gz")
+    concat_vcf = VCF(concat_vcf_path)
 
     for vcf in [vcf_1_ragged_subset, vcf_2_ragged_subset]:
         samples = vcf.samples
@@ -337,14 +349,14 @@ def ragged_concat(
                         output,
                         vcf.path,
                         "-o",
-                        Path(temp_dir) / "ragged_concat.temp.vcf.gz",
+                        temp_dir_path / "ragged_concat.temp.vcf.gz",
                         "-O",
                         "b",
                     ],
                     check=True,
                 )
                 subprocess.run(
-                    ["mv", Path(temp_dir) / "ragged_concat.temp.vcf.gz", output],
+                    ["mv", temp_dir_path / "ragged_concat.temp.vcf.gz", output],
                 )
             else:
                 subprocess.run(
