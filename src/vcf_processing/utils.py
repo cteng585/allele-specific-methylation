@@ -2,7 +2,7 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Union
 
-from src.vcf_processing.classes import VCF
+from vcf_processing.classes import VCF
 
 
 def subset(
