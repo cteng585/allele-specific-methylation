@@ -6,7 +6,7 @@ from typing import Optional, Tuple, Union
 
 import polars as pl
 
-from vcf_processing.classes import VCF
+from vcf_processing.classes import VCFFile
 from vcf_processing.models import VCFMetadata, VCFFormatField, VCFInfoField
 from vcf_processing.utils import subset as vcf_subset
 
@@ -89,20 +89,20 @@ def parse_vcf_metadata(metadata: list[str]) -> dict[str, list[VCFMetadata]]:
     return metadata_fields
 
 
-def read_vcf_metadata(vcf: Union[str, Path]) -> Tuple[list[str], list[str]]:
+def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]:
     """
     Read in the VCF non-data lines and split into the metadata and header portions
 
-    :param vcf: the path to the VCF file to split as either a string or Path object
+    :param vcf_path: the path to the VCF file to split as either a string or Path object
     :return: a tuple containing the metadata and data portions of the VCF file
     """
-    vcf = Path(vcf)
+    vcf_path = Path(vcf_path)
 
-    if isinstance(vcf, Path) and not vcf.exists():
-        raise ValueError(f"The VCF file {vcf} could not be found")
+    if isinstance(vcf_path, Path) and not vcf_path.exists():
+        raise ValueError(f"The VCF file {vcf_path} could not be found")
 
     metadata = subprocess.run(
-        ["bcftools", "head", vcf], check=True, capture_output=True
+        ["bcftools", "head", vcf_path], check=True, capture_output=True
     ).stdout.decode("utf-8")
 
     metadata, header = metadata.splitlines()[:-1], metadata.splitlines()[-1].split("\t")
@@ -111,21 +111,21 @@ def read_vcf_metadata(vcf: Union[str, Path]) -> Tuple[list[str], list[str]]:
 
 
 # TODO: add support for compressed VCF
-def read_vcf_data(vcf: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
+def read_vcf_data(vcf_path: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
     """
     Read in the VCF data as a polars DataFrame
 
-    :param vcf: the path to the VCF file to read in
+    :param vcf_path: the path to the VCF file to read in
     :param len_metadata: the number of metadata lines in the VCF file. used to skip the
         metadata since it isn't tab/comma separated
     :return: the VCF data as a polars DataFrame
     """
-    vcf = Path(vcf)
+    vcf_path = Path(vcf_path)
 
-    if isinstance(vcf, Path) and not vcf.exists():
-        raise ValueError(f"The VCF file {vcf} could not be found")
+    if isinstance(vcf_path, Path) and not vcf_path.exists():
+        raise ValueError(f"The VCF file {vcf_path} could not be found")
 
-    vcf_data = pl.read_csv(vcf, skip_rows=len_metadata, separator="\t")
+    vcf_data = pl.read_csv(vcf_path, skip_rows=len_metadata, separator="\t")
 
     return vcf_data
 
@@ -143,8 +143,8 @@ def _setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
 
 
 def make_concat_compatible(
-    temp_dir_path: Path, vcf_1: VCF, vcf_2: VCF
-) -> tuple[VCF, VCF]:
+    temp_dir_path: Path, vcf_1: VCFFile, vcf_2: VCFFile
+) -> tuple[VCFFile, VCFFile]:
     """
     Make two VCFs compatible for combining using bcftools concat. BCFTools requires that
     VCFs have the same headers before they can be combined using bcftools concat.
@@ -171,7 +171,7 @@ def vcf_concat(
     temp_dir: Optional[Union[str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
     *args,
-) -> VCF:
+) -> VCFFile:
     """
     Combine two VCF files using bcftools concat
 
@@ -182,8 +182,8 @@ def vcf_concat(
     """
     temp_dir_path = _setup_workspace(temp_dir)
 
-    vcf_1 = VCF(vcf_1_path)
-    vcf_2 = VCF(vcf_2_path)
+    vcf_1 = VCFFile(vcf_1_path)
+    vcf_2 = VCFFile(vcf_2_path)
     if output is None:
         if temp_dir is None:
             output = Path("concat.vcf.gz")
@@ -214,7 +214,7 @@ def vcf_concat(
     except subprocess.CalledProcessError as err:
         print(err.stderr.decode())
 
-    return VCF(output)
+    return VCFFile(output)
 
 
 def vcf_merge(
@@ -223,7 +223,7 @@ def vcf_merge(
     sample_rename: Optional[list[dict[str, str]]] = None,
     temp_dir: Optional[Union[str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
-) -> VCF:
+) -> VCFFile:
     """
     Merge two VCF files using bcftools merge
 
@@ -238,8 +238,8 @@ def vcf_merge(
     """
     temp_dir_path = _setup_workspace(temp_dir)
 
-    vcf_1 = VCF(vcf_1_path)
-    vcf_2 = VCF(vcf_2_path)
+    vcf_1 = VCFFile(vcf_1_path)
+    vcf_2 = VCFFile(vcf_2_path)
     if output is None:
         if temp_dir is None:
             output = Path("merge.vcf.gz")
@@ -248,9 +248,9 @@ def vcf_merge(
 
     # TODO: might not need to compress just to merge; this is a significant portion of runtime
     # compress if not already compressed
-    for vcf in [vcf_1, vcf_2]:
-        if not vcf.compressed:
-            vcf.compress(Path(temp_dir_path / vcf.path.name).with_suffix(".vcf.gz"))
+    for vcf_file in [vcf_1, vcf_2]:
+        if not vcf_file.compressed:
+            vcf_file.compress(Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz"))
 
     # TODO: consider making placeholder files with samples renamed for the merge
     if sample_rename is not None:
@@ -265,7 +265,7 @@ def vcf_merge(
         check=True,
     )
 
-    return VCF(output)
+    return VCFFile(output)
 
 
 def ragged_concat(
@@ -274,11 +274,11 @@ def ragged_concat(
     sample_rename: Optional[list[dict[str, str]]] = None,
     temp_dir: Optional[Union[str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
-) -> VCF:
+) -> VCFFile:
     temp_dir_path = _setup_workspace(temp_dir)
 
-    vcf_1 = VCF(vcf_1_path)
-    vcf_2 = VCF(vcf_2_path)
+    vcf_1 = VCFFile(vcf_1_path)
+    vcf_2 = VCFFile(vcf_2_path)
     if output is None:
         if temp_dir is None:
             output = Path("ragged_concat.vcf.gz")
@@ -286,16 +286,16 @@ def ragged_concat(
             output = Path(temp_dir_path / "ragged_concat.vcf.gz")
 
     # compress if not already compressed
-    for vcf in [vcf_1, vcf_2]:
-        if not vcf.compressed:
-            vcf.compress(Path(temp_dir_path / vcf.path.name).with_suffix(".vcf.gz"))
+    for vcf_file in [vcf_1, vcf_2]:
+        if not vcf_file.compressed:
+            vcf_file.compress(Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz"))
 
     if sample_rename is not None:
 
         # rename samples using bcftools merge so that all samples between files being
         # merged are unique this is required if the `--force-samples` flag is not used
-        for file_idx, vcf in enumerate([vcf_1, vcf_2]):
-            vcf.reheader(sample_rename[file_idx])
+        for file_idx, vcf_file in enumerate([vcf_1, vcf_2]):
+            vcf_file.reheader(sample_rename[file_idx])
 
     # get the samples that are in common between the two vcf files to subset
     # for concatenation
@@ -335,10 +335,10 @@ def ragged_concat(
         ],
         check=True,
     )
-    concat_vcf = VCF(concat_vcf_path)
+    concat_vcf = VCFFile(concat_vcf_path)
 
-    for vcf in [vcf_1_ragged_subset, vcf_2_ragged_subset]:
-        samples = vcf.samples
+    for vcf_file in [vcf_1_ragged_subset, vcf_2_ragged_subset]:
+        samples = vcf_file.samples
 
         if samples:
             if output.exists():
@@ -347,7 +347,7 @@ def ragged_concat(
                         "bcftools",
                         "merge",
                         output,
-                        vcf.path,
+                        vcf_file.path,
                         "-o",
                         temp_dir_path / "ragged_concat.temp.vcf.gz",
                         "-O",
@@ -364,7 +364,7 @@ def ragged_concat(
                         "bcftools",
                         "merge",
                         concat_vcf.path,
-                        vcf.path,
+                        vcf_file.path,
                         "-o",
                         output,
                         "-O",
@@ -374,6 +374,6 @@ def ragged_concat(
                 )
 
                 # instantiating the VCF object here to compress and index the file
-                VCF(output)
+                VCFFile(output)
 
-    return VCF(output)
+    return VCFFile(output)

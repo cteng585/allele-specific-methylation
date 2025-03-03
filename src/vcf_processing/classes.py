@@ -8,7 +8,7 @@ from typing import Optional, Union
 
 
 @dataclass
-class VCF:
+class VCFFile:
     path: Union[str, Path]
     _compressed: bool = field(default=False, init=True)
     _indexed: bool = field(default=False, init=True)
