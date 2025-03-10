@@ -8,7 +8,7 @@ from vcf_processing.classes import VCF
 def subset(
     vcf: VCF,
     samples: Union[str, list[str]],
-    subset_path: Optional[Union[str, Path]] = None,
+    output: Optional[Union[str, Path]] = None,
     force: bool = False,
 ) -> VCF:
     """
@@ -16,19 +16,24 @@ def subset(
 
     :param vcf: the VCF to subset
     :param samples: the samples of the VCF to include in the subset
-    :param subset_path: the path to save the subsetted VCF to
+    :param output: the path to save the subsetted VCF to
     :param force: whether to try to subset samples that may not exist in the VCF
     :return: a new VCF object with the subsetted samples
     """
-    if not subset_path:
+    output = Path(output)
+    if not output or output.is_dir():
         subset_string = ".".join(
             [sample for sample in samples if sample in vcf.samples]
         )
-        subset_path = Path(vcf.path.parent / vcf.path.stem).with_suffix(
-            f".{subset_string}.vcf.gz" if subset_string else ".empty.vcf.gz"
-        )
-    else:
-        subset_path = Path(subset_path)
+
+        if not output:
+            output = Path(vcf.path.parent / vcf.path.stem).with_suffix(
+                f".{subset_string}.vcf.gz" if subset_string else ".empty.vcf.gz"
+            )
+        else:
+            output = Path(output / vcf.path.stem).with_suffix(
+                f".{subset_string}.vcf.gz" if subset_string else ".empty.vcf.gz"
+            )
 
     args = [
         "bcftools",
@@ -37,7 +42,7 @@ def subset(
         "-s",
         samples if isinstance(samples, str) else ",".join(samples),
         "-o",
-        subset_path,
+        output,
         "-O",
         "b",
     ]
@@ -49,4 +54,4 @@ def subset(
         check=True
     )
 
-    return VCF(subset_path)
+    return VCF(output)

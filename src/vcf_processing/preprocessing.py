@@ -288,14 +288,18 @@ def ragged_concat(
     # compress if not already compressed
     for vcf_file in [vcf_1, vcf_2]:
         if not vcf_file.compressed:
-            vcf_file.compress(Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz"))
+            vcf_file.compress(
+                output=Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz")
+            )
 
     if sample_rename is not None:
 
         # rename samples using bcftools merge so that all samples between files being
         # merged are unique this is required if the `--force-samples` flag is not used
         for file_idx, vcf_file in enumerate([vcf_1, vcf_2]):
-            vcf_file.reheader(sample_rename[file_idx])
+            vcf_file.reheader(
+                rename_dict=sample_rename[file_idx]
+            )
 
     # get the samples that are in common between the two vcf files to subset
     # for concatenation
@@ -314,11 +318,11 @@ def ragged_concat(
     )
 
     # concat the common samples, merge anything remaining
-    vcf_1_common_subset = vcf_subset(vcf_1, to_concat, force=True)
-    vcf_2_common_subset = vcf_subset(vcf_2, to_concat, force=True)
+    vcf_1_common_subset = vcf_subset(vcf_1, to_concat, output=Path(temp_dir_path), force=True)
+    vcf_2_common_subset = vcf_subset(vcf_2, to_concat, output=Path(temp_dir_path), force=True)
 
-    vcf_1_ragged_subset = vcf_subset(vcf_1, to_merge, force=True)
-    vcf_2_ragged_subset = vcf_subset(vcf_2, to_merge, force=True)
+    vcf_1_ragged_subset = vcf_subset(vcf_1, to_merge, output=Path(temp_dir_path), force=True)
+    vcf_2_ragged_subset = vcf_subset(vcf_2, to_merge, output=Path(temp_dir_path), force=True)
 
     concat_vcf_path = temp_dir_path / "concat.vcf.gz"
     subprocess.run(
