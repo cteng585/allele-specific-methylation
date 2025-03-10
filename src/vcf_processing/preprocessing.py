@@ -103,7 +103,7 @@ def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]
 
     metadata = subprocess.run(
         ["bcftools", "head", vcf_path], check=True, capture_output=True
-    ).stdout.decode("utf-8")
+    ).stdout.decode("utf-8").strip()
 
     metadata, header = metadata.splitlines()[:-1], metadata.splitlines()[-1].split("\t")
 
@@ -111,12 +111,12 @@ def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]
 
 
 # TODO: add support for compressed VCF
-def read_vcf_data(vcf_path: Union[str, Path], len_metadata: int) -> pl.LazyFrame:
+def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str]) -> pl.LazyFrame:
     """
     Read in the VCF data as a polars DataFrame
 
     :param vcf_path: the path to the VCF file to read in
-    :param len_metadata: the number of metadata lines in the VCF file. used to skip the
+    :param metadata: the metadata lines in the VCF file. used to skip the
         metadata since it isn't tab/comma separated
     :return: the VCF data as a polars DataFrame
     """
@@ -124,6 +124,14 @@ def read_vcf_data(vcf_path: Union[str, Path], len_metadata: int) -> pl.LazyFrame
 
     if isinstance(vcf_path, Path) and not vcf_path.exists():
         raise ValueError(f"The VCF file {vcf_path} could not be found")
+
+    # the output from `bcftools head` doesn't necessarily reflect the number of lines
+    # that need to be skipped to reach the data portion of the VCF since it sometimes
+    # adds an additional `##FILTER=<ID=PASS>` line that isn't present in the actual VCF
+    if re.match(r"##FILTER=<ID=PASS>", metadata[1]):
+        len_metadata = len(metadata) + 1
+    else:
+        len_metadata = len(metadata)
 
     vcf_data = pl.read_csv(vcf_path, skip_rows=len_metadata, separator="\t")
 
