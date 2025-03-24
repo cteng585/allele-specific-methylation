@@ -2,15 +2,15 @@ import subprocess
 from pathlib import Path
 from typing import Optional, Union
 
-from vcf_processing.classes import VCF
+from src.vcf_processing.classes import VCFFile
 
 
 def subset(
-    vcf: VCF,
+    vcf: VCFFile,
     samples: Union[str, list[str]],
     output: Optional[Union[str, Path]] = None,
     force: bool = False,
-) -> VCF:
+) -> VCFFile:
     """
     Use bcftools to subset the VCF file
 
@@ -54,4 +54,4 @@ def subset(
         check=True
     )
 
-    return VCF(output)
+    return VCFFile(output)

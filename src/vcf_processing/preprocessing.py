@@ -6,87 +6,8 @@ from typing import Optional, Tuple, Union
 
 import polars as pl
 
-from vcf_processing.classes import VCFFile
-from vcf_processing.models import VCFMetadata, VCFFormatField, VCFInfoField
-from vcf_processing.utils import subset as vcf_subset
-
-
-VCF_HEADER = ["#CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT"]
-
-
-def parse_metadata_string(metadata_string: str) -> dict:
-    """
-    Parse a VCF metadata string into a dict
-
-    :param metadata_string: the VCF metadata string to parse into a dict
-    :return: the VCF metadata string as a dict
-    """
-    if isinstance(metadata_string, str):
-        if metadata_string := re.search(
-            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)", metadata_string
-        ):
-            metadata_string = metadata_string.group(1)
-        else:
-            raise ValueError("Metadata string is not well-formed")
-    else:
-        raise TypeError("Expected type str for the VCF metadata string")
-
-    metadata = re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', metadata_string)
-
-    id, number, data_type, description = None, None, None, None
-    other = {}
-
-    for key_value_pair in metadata:
-        key, value = re.split(r'=(?=(?:[^"]*"[^"]*")*[^"]*$)', key_value_pair)
-
-        match key:
-            case "ID":
-                id = value
-            case "Number":
-                number = value
-            case "Type":
-                data_type = value
-            case "Description":
-                description = re.sub(r'"', "", value)
-            case _:
-                other[key] = value
-
-    if any(value is None for value in [id, number, data_type, description]):
-        raise ValueError(
-            f"Missing a metadata value in the FORMAT string {metadata_string}"
-        )
-
-    return {
-        "ID": id,
-        "Number": number,
-        "Type": data_type,
-        "Description": description,
-        **other,
-    }
-
-
-def parse_vcf_metadata(metadata: list[str]) -> dict[str, list[VCFMetadata]]:
-    """
-    Parse the VCF metadata
-
-    :param metadata: the metadata from the VCF file
-    :return: the VCF metadata as a list of VCFMetadata objects
-    """
-
-    metadata_fields = {"format_fields": [], "info_fields": []}
-
-    for line in metadata:
-        if re.match(r"^##FORMAT", line):
-            format_field_metadata = parse_metadata_string(line)
-            metadata_fields["format_fields"].append(
-                VCFFormatField(**format_field_metadata)
-            )
-
-        if re.match(r"^##INFO", line):
-            info_field_metadata = parse_metadata_string(line)
-            metadata_fields["info_fields"].append(VCFInfoField(**info_field_metadata))
-
-    return metadata_fields
+from src.vcf_processing.classes import VCFFile
+from src.vcf_processing.utils import subset as vcf_subset
 
 
 def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]:
@@ -111,7 +32,7 @@ def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]
 
 
 # TODO: add support for compressed VCF
-def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str]) -> pl.LazyFrame:
+def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str], header: list[str]) -> pl.LazyFrame:
     """
     Read in the VCF data as a polars DataFrame
 
@@ -127,13 +48,37 @@ def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str]) -> pl.LazyFra
 
     # the output from `bcftools head` doesn't necessarily reflect the number of lines
     # that need to be skipped to reach the data portion of the VCF since it sometimes
-    # adds an additional `##FILTER=<ID=PASS>` line that isn't present in the actual VCF
-    if re.match(r"##FILTER=<ID=PASS>", metadata[1]):
-        len_metadata = len(metadata) + 1
-    else:
-        len_metadata = len(metadata)
+    # adds a `##FILTER=<ID=PASS>` line that isn't present in the actual VCF
+    vcf_data = pl.read_csv(vcf_path, skip_rows=len(metadata) + 1, separator="\t", ignore_errors=True)
 
-    vcf_data = pl.read_csv(vcf_path, skip_rows=len_metadata, separator="\t")
+    if not "#CHROM" in vcf_data.columns:
+        vcf_data = pl.concat(
+            [
+                pl.DataFrame([vcf_data.columns], schema=header, orient="row"),
+                vcf_data.rename({key: value for key, value in zip(vcf_data.columns, header)})
+            ],
+            how="vertical_relaxed",
+        )
+
+        vcf_data.with_columns(
+            QUAL=pl.when(
+                pl.col("QUAL").cast(pl.Float32(), strict=False).is_null()
+            ).then(
+                None
+            ).otherwise(
+                pl.col("QUAL")
+            )
+        )
+
+        # strict set to False makes it so that values that can't be cast to the specified data type
+        # are quietly set to null values
+        vcf_data = vcf_data.cast(
+            {
+                "POS": pl.Int32(),
+                "QUAL": pl.Float32(),
+            },
+            strict=False,
+        )
 
     return vcf_data
 
