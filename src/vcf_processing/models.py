@@ -1,9 +1,6 @@
-import re
 from typing import Literal, Optional, Union
-from typing_extensions import Annotated
 
-from pydantic import BaseModel, ConfigDict, Field
-
+from pydantic import BaseModel, ConfigDict
 
 class VCFMetadata(BaseModel):
     """

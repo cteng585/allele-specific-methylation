@@ -3,7 +3,7 @@ import re
 import polars as pl
 
 from src.vcf_processing.models import VCFFormatField, VCFInfoField, VCFMetadata
-from src.vcf_processing.constants import VCF_BASE_HEADER
+from src.constants import VCF_BASE_HEADER
 
 
 def parse_metadata_string(metadata_string: str) -> dict:
