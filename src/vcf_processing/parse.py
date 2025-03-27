@@ -9,16 +9,16 @@ from src.constants import VCF_BASE_HEADER
 def parse_metadata_string(metadata_string: str) -> dict:
     """
     Parse a VCF metadata string (a line from the VCF header) into a dict if it
-    contains a FORMAT or INFO field
+    contains a contig, FORMAT, or INFO field
 
     :param metadata_string: the VCF metadata string to parse into a dict
     :return: the VCF metadata string as a dict
     """
     if isinstance(metadata_string, str):
         if metadata_string := re.search(
-            r"(?:^##FORMAT=<|^##INFO=<)(.*)(?:>$)", metadata_string
+            r"(^##contig=<|^##FORMAT=<|^##INFO=<)(.*)(?:>$)", metadata_string
         ):
-            metadata_string = metadata_string.group(1)
+            metadata_type, metadata_string = metadata_string.group(1), metadata_string.group(2)
         else:
             raise ValueError("Metadata string is not well-formed")
     else:
@@ -26,39 +26,67 @@ def parse_metadata_string(metadata_string: str) -> dict:
 
     metadata = re.split(r',(?=(?:[^"]*"[^"]*")*[^"]*$)', metadata_string)
 
-    field_id, number, data_type, description = None, None, None, None
-    other = {}
+    match metadata_type:
+        case "##contig=<":
+            contig_id, contig_length, contig_assembly = None, None, None
+            other = {}
 
-    for key_value_pair in metadata:
-        key, value = re.split(r'=(?=(?:[^"]*"[^"]*")*[^"]*$)', key_value_pair)
+            for key_value_pair in metadata:
+                key, value = re.split(r'=(?=(?:[^"]*"[^"]*")*[^"]*$)', key_value_pair)
+                value = re.sub(r"[\"']", "", value)
 
-        match key:
-            case "ID":
-                field_id = value
-            case "Number":
-                number = value
-            case "Type":
-                data_type = value
-            case "Description":
-                description = re.sub(r'"', "", value)
-            case _:
-                other[key] = value
+                match key:
+                    case "ID":
+                        contig_id = value
+                    case "length":
+                        contig_length = value
+                    case "assembly":
+                        contig_assembly = value
 
-    if any(value is None for value in [field_id, number, data_type, description]):
-        raise ValueError(
-            f"Missing a metadata value in the FORMAT string {metadata_string}"
-        )
+            return {
+                "ID": contig_id,
+                "Length": contig_length,
+                "Assembly": contig_assembly,
+                **other,
+            }
 
-    return {
-        "ID": field_id,
-        "Number": number,
-        "Type": data_type,
-        "Description": description,
-        **other,
-    }
+        case "##FORMAT=<" | "##INFO=<":
+            field_id, number, data_type, description = None, None, None, None
+            other = {}
+
+            for key_value_pair in metadata:
+                key, value = re.split(r'=(?=(?:[^"]*"[^"]*")*[^"]*$)', key_value_pair)
+
+                match key:
+                    case "ID":
+                        field_id = value
+                    case "Number":
+                        number = value
+                    case "Type":
+                        data_type = value
+                    case "Description":
+                        description = re.sub(r'"', "", value)
+                    case _:
+                        other[key] = value
+
+            if any(value is None for value in [field_id, number, data_type, description]):
+                raise ValueError(
+                    f"Missing a metadata value in the FORMAT string {metadata_string}"
+                )
+
+            return {
+                "ID": field_id,
+                "Number": number,
+                "Type": data_type,
+                "Description": description,
+                **other,
+            }
+
+        case _:
+            raise NotImplementedError(f"Metadata type {metadata_type} cannot be parsed")
 
 
-def parse_vcf_metadata(metadata: list[str]) -> dict[str, list[VCFMetadata]]:
+def parse_vcf_metadata(metadata: list[str]) -> list[VCFMetadata]:
     """
     Parse the VCF metadata header
 
@@ -66,18 +94,24 @@ def parse_vcf_metadata(metadata: list[str]) -> dict[str, list[VCFMetadata]]:
     :return: the VCF metadata as a list of VCFMetadata objects
     """
 
-    metadata_fields = {"format_fields": [], "info_fields": []}
+    metadata_fields = []
 
     for line in metadata:
-        if re.match(r"^##FORMAT", line):
+        if re.match(r"^##contig", line):
+            contig_field_meadata = parse_metadata_string(line)
+            metadata_fields.append(
+                VCFMetadata(**contig_field_meadata)
+            )
+
+        elif re.match(r"^##FORMAT", line):
             format_field_metadata = parse_metadata_string(line)
-            metadata_fields["format_fields"].append(
+            metadata_fields.append(
                 VCFFormatField(**format_field_metadata)
             )
 
-        if re.match(r"^##INFO", line):
+        elif re.match(r"^##INFO", line):
             info_field_metadata = parse_metadata_string(line)
-            metadata_fields["info_fields"].append(VCFInfoField(**info_field_metadata))
+            metadata_fields.append(VCFInfoField(**info_field_metadata))
 
     return metadata_fields
 
