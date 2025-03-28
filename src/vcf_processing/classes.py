@@ -6,6 +6,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Optional, Union
 
+import polars as pl
+
+from src.constants import VCF_BASE_HEADER
+from src.vcf_processing.models import VCFMetadata
+
 
 @dataclass
 class VCFFile:
@@ -88,7 +93,11 @@ class VCFFile:
         else:
             return True
 
-    def compress(self, output: Optional[Union[str, Path]] = None) -> None:
+    def compress(
+        self,
+        keep: Optional[bool] = True,
+        output: Optional[Union[str, Path]] = None
+    ) -> None:
         if self.path.suffix == ".gz" or self.compressed:
             warnings.warn(
                 "The VCF file is already compressed, not compressing again or generating a new file",
@@ -97,27 +106,20 @@ class VCFFile:
             return
 
         if not output:
-            subprocess.run(
-                [
-                    "bgzip",
-                    self.path,
-                ],
-                check=True
-            )
+            compression_args = [
+                "bgzip", self.path, "-f"
+            ]
             self.path = self.path.with_suffix(".vcf.gz")
         else:
-            subprocess.run(
-                [
-                    "bgzip",
-                    self.path,
-                    "-k",
-                    "-o",
-                    output,
-                ],
-                check=True
-            )
+            compression_args = [
+                "bgzip", self.path, "-f", "-o", output
+            ]
             self.path = output
 
+        if keep:
+            compression_args.append("-k")
+
+        subprocess.run(compression_args, check=True)
         self.compressed = True
         self.index()
         return

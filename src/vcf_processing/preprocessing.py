@@ -293,7 +293,9 @@ def vcf_merge(
     # compress if not already compressed
     for vcf_file in [vcf_1, vcf_2]:
         if not vcf_file.compressed:
-            vcf_file.compress(Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz"))
+            vcf_file.compress(
+                output=Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz")
+            )
 
     # TODO: consider making placeholder files with samples renamed for the merge
     if sample_rename is not None:
