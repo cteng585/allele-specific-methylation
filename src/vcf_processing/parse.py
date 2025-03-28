@@ -2,8 +2,8 @@ import re
 
 import polars as pl
 
-from src.vcf_processing.models import VCFFormatField, VCFInfoField, VCFMetadata
 from src.constants import VCF_BASE_HEADER
+from src.vcf_processing.models import VCFContigField, VCFFormatField, VCFInfoField, VCFMetadata
 
 
 def parse_metadata_string(metadata_string: str) -> dict:
@@ -45,8 +45,8 @@ def parse_metadata_string(metadata_string: str) -> dict:
 
             return {
                 "ID": contig_id,
-                "Length": contig_length,
-                "Assembly": contig_assembly,
+                "length": contig_length,
+                "assembly": contig_assembly,
                 **other,
             }
 
@@ -100,7 +100,7 @@ def parse_vcf_metadata(metadata: list[str]) -> list[VCFMetadata]:
         if re.match(r"^##contig", line):
             contig_field_meadata = parse_metadata_string(line)
             metadata_fields.append(
-                VCFMetadata(**contig_field_meadata)
+                VCFContigField(**contig_field_meadata)
             )
 
         elif re.match(r"^##FORMAT", line):
@@ -111,12 +111,14 @@ def parse_vcf_metadata(metadata: list[str]) -> list[VCFMetadata]:
 
         elif re.match(r"^##INFO", line):
             info_field_metadata = parse_metadata_string(line)
-            metadata_fields.append(VCFInfoField(**info_field_metadata))
+            metadata_fields.append(
+                VCFInfoField(**info_field_metadata)
+            )
 
     return metadata_fields
 
 
-def parse_format(data: pl.DataFrame, metadata: dict[str, VCFFormatField]):
+def explode_format(data: pl.DataFrame, metadata: list[VCFMetadata]):
     """
     Split the sample data in a VCF into separate columns for each FORMAT
     field present in the VCF metadata
@@ -129,7 +131,9 @@ def parse_format(data: pl.DataFrame, metadata: dict[str, VCFFormatField]):
         field for field in data.columns if field not in VCF_BASE_HEADER
     ]
 
-    format_fields = metadata["format_fields"]
+    format_fields = [
+        field for field in metadata if field.MetadataType == "FormatField"
+    ]
 
     if len(sample_fields) == 1:
         data = data.with_columns(
@@ -148,5 +152,23 @@ def parse_format(data: pl.DataFrame, metadata: dict[str, VCFFormatField]):
     data = data.drop(
         [field for field in sample_fields] + ["FORMAT"]
     )
+
+    return data
+
+
+def implode_format(data: pl.DataFrame, sample_name: str):
+    sample_fields = [
+        field for field in data.columns if field not in VCF_BASE_HEADER
+    ]
+
+    data = data.with_columns(
+        pl.lit(
+            ":".join(sample_fields)
+        ).alias("FORMAT"),
+        pl.concat_str(
+            pl.col(sample_fields).fill_null("."),
+            separator=":"
+        ).alias(sample_name)
+    ).drop(sample_fields)
 
     return data
