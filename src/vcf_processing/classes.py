@@ -167,3 +167,85 @@ class VCFFile:
 
         # cleanup the tempfile
         os.remove(sample_rename_file.name)
+
+
+@dataclass
+class VCFData:
+    metadata: list[VCFMetadata]
+    data: Union[pl.DataFrame, pl.LazyFrame]
+    hp1: Union[pl.DataFrame, pl.LazyFrame] = field(default=None, init=True)
+    hp2: Union[pl.DataFrame, pl.LazyFrame] = field(default=None, init=True)
+    _raw: Union[pl.DataFrame, pl.LazyFrame] = field(default=None, init=False)
+    _input_type: type = field(default=None, init=False)
+    _exploded: bool = field(default=False, init=True)
+
+    def __post_init__(self):
+        if isinstance(self.data, pl.DataFrame):
+            self._raw = self.data.lazy()
+            self._input_type = pl.DataFrame
+        else:
+            self._raw = self.data
+            self._input_type = pl.LazyFrame
+
+    def explode_format(self):
+        """
+        Split the sample data in a VCF into separate columns for each FORMAT
+        field present in the VCF metadata
+        """
+        self._exploded = True
+
+        sample_fields = [
+            field for field in self.data.columns if field not in VCF_BASE_HEADER
+        ]
+
+        format_fields = [
+            field for field in self.metadata if field.MetadataType == "FormatField"
+        ]
+
+        if len(sample_fields) == 1:
+            self.data = self.data.with_columns(
+                [pl.col(sample_fields[0]).str.split(":").list.get(
+                    pl.col("FORMAT").str.split(":").list.eval(pl.element().index_of(field.ID)).list.get(0)
+                ).alias(field.ID) for field in format_fields]
+            )
+        else:
+            for sample_field in sample_fields:
+                self.data = self.data.with_columns(
+                    [pl.col(sample_field).str.split(":").list.get(
+                        pl.col("FORMAT").str.split(":").list.eval(pl.element().index_of(field.ID)).list.get(0)
+                    ).alias(f"{field.ID}_{sample_field}") for field in format_fields]
+                )
+
+        self.data = self.data.drop(
+            [field for field in sample_fields] + ["FORMAT"]
+        )
+
+    def reset(self):
+        if self._input_type == pl.DataFrame:
+            self.data = self._raw.collect()
+        else:
+            self.data = self._raw
+
+    def split_haplotype_variants(self):
+        if not self._exploded:
+            self.explode_format()
+
+        # only keep variants where genotype data is available and the variant is phased
+        self.data = self.data.filter(
+            (pl.col("GT") != ".") &
+            (pl.col("PS").is_not_null())
+        )
+
+        # get the variants that have an alt allele for the first haplotype
+        self.hp1 = self.data.filter(
+            pl.col("GT").str.contains(r"\|")
+        ).filter(
+            (pl.col("GT").str.split("|").list.get(0).cast(pl.Int16) != 0)
+        )
+
+        # get the variants that have an alt allele for the second haplotype
+        self.hp2 = self.data.filter(
+            pl.col("GT").str.contains(r"\|")
+        ).filter(
+            (pl.col("GT").str.split("|").list.get(1).cast(pl.Int16) != 0)
+        )
