@@ -1,12 +1,28 @@
+import re
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Optional, Tuple, Union
 
 import polars as pl
+import polars.selectors as cs
 
+from src.constants import VCF_BASE_HEADER
 from src.vcf_processing.classes import VCFFile
+from src.vcf_processing.parse import explode_format, implode_format, parse_vcf_metadata
 from src.vcf_processing.utils import subset as vcf_subset
+
+
+def _setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
+    if temp_dir is None:
+        temp_dir = tempfile.TemporaryDirectory()
+        temp_dir_path = Path(temp_dir.name)
+    elif not Path(temp_dir).exists():
+        Path(temp_dir).mkdir(parents=True, exist_ok=False)
+        temp_dir_path = Path(temp_dir)
+    else:
+        temp_dir_path = Path(temp_dir)
+    return temp_dir_path
 
 
 def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]:
@@ -31,7 +47,7 @@ def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]
 
 
 # TODO: add support for compressed VCF
-def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str], header: list[str]) -> pl.LazyFrame:
+def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str], header: list[str]) -> pl.DataFrame:
     """
     Read in the VCF data as a polars DataFrame
 
@@ -82,18 +98,6 @@ def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str], header: list[
     return vcf_data
 
 
-def _setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
-    if temp_dir is None:
-        temp_dir = tempfile.TemporaryDirectory()
-        temp_dir_path = Path(temp_dir.name)
-    elif not Path(temp_dir).exists():
-        Path(temp_dir).mkdir(parents=True, exist_ok=False)
-        temp_dir_path = Path(temp_dir)
-    else:
-        temp_dir_path = Path(temp_dir)
-    return temp_dir_path
-
-
 def make_concat_compatible(
     temp_dir_path: Path, vcf_1: VCFFile, vcf_2: VCFFile
 ) -> tuple[VCFFile, VCFFile]:
@@ -115,6 +119,93 @@ def make_concat_compatible(
     vcf_2_compatible = vcf_subset(vcf_2, list(shared_samples), vcf_2_compatible)
 
     return vcf_1_compatible, vcf_2_compatible
+
+
+def deduplicate_short_long_vcf(
+    concat_vcf: Union[Path, str],
+    short_read_vcf: Union[Path, str],
+    long_read_vcf: Union[Path, str],
+):
+    metadata_raw_concat, header_concat = read_vcf_metadata(concat_vcf)
+    metadata_short_read, header_short_read = read_vcf_metadata(short_read_vcf)
+    metadata_long_read, header_long_read = read_vcf_metadata(long_read_vcf)
+
+    concat_metadata = parse_vcf_metadata(metadata_raw_concat)
+    short_read_metadata = parse_vcf_metadata(metadata_short_read)
+    long_read_metadata = parse_vcf_metadata(metadata_long_read)
+
+    concat_data = read_vcf_data(concat_vcf, metadata_raw_concat, header_concat)
+    short_read = read_vcf_data(short_read_vcf, metadata_short_read, header_short_read)
+    long_read = read_vcf_data(long_read_vcf, metadata_long_read, header_long_read)
+
+    # separate duplicated and non-duplicated data
+    nonduplicated_data = concat_data.filter(
+        ~concat_data.select(pl.col("#CHROM", "POS")).is_duplicated()
+    )
+
+    duplicated_data = concat_data.filter(
+        concat_data.select(pl.col("#CHROM", "POS")).is_duplicated()
+    ).select(
+        pl.col("#CHROM", "POS")
+    ).unique()
+
+    # expand the data fields for VCFs for duplicated data
+    short_read_expanded = explode_format(
+        short_read.join(
+            duplicated_data.select(pl.col("#CHROM", "POS")),
+            on=["#CHROM", "POS"],
+            how="inner",
+        ),
+        short_read_metadata
+    )
+    long_read_expanded = explode_format(
+        long_read.join(
+            duplicated_data.select(pl.col("#CHROM", "POS")),
+            on=["#CHROM", "POS"],
+            how="inner",
+        ),
+        long_read_metadata
+    )
+
+    # within each chromosome-position group, de-duplicate the data using the guidelines:
+    # 1. prefer phasing data from the row that has phase information (presumably long read)
+    # 2. otherwise prefer data from the row that lacks haplotype information (presumably short read)
+    duplicated_data = duplicated_data.join(
+        short_read_expanded.select(
+            pl.col("#CHROM", "POS"),
+            cs.matches(r"^GT|PS"),
+        ),
+        on=["#CHROM", "POS"],
+        how="inner",
+    ).join(
+        long_read_expanded.select(
+            pl.col(colname for colname in VCF_BASE_HEADER if colname != "FORMAT"),
+            pl.col(
+                colname for colname in long_read_expanded.columns if
+                colname not in VCF_BASE_HEADER and not re.match(r"^GT|PS", colname)
+            )
+        ),
+        on=["#CHROM", "POS"],
+        how="inner",
+    )
+
+    # recombine the exploded data fields
+    duplicated_data = implode_format(
+        duplicated_data,
+        (set(nonduplicated_data.columns) - set(VCF_BASE_HEADER)).pop()
+    )
+
+    # need to sort for the de-duplicated data can be indexed
+    # sort order should be the order of the contig fields in the header
+    contigs = [
+        field.ID for field in concat_metadata if field.MetadataType == "ContigField"
+    ]
+
+    return metadata_raw_concat, pl.concat(
+        [nonduplicated_data, duplicated_data],
+    ).sort(
+        by=[pl.col("#CHROM").cast(pl.Enum(contigs)), pl.col("POS")],
+    )
 
 
 def vcf_concat(
@@ -221,16 +312,16 @@ def vcf_merge(
 
 
 def ragged_concat(
-    vcf_1_path: Union[str, Path],
-    vcf_2_path: Union[str, Path],
+    short_read_vcf_path: Union[str, Path],
+    long_read_vcf_path: Union[str, Path],
     sample_rename: Optional[list[dict[str, str]]] = None,
     temp_dir: Optional[Union[str, Path]] = None,
     output: Optional[Union[str, Path]] = None,
 ) -> VCFFile:
     temp_dir_path = _setup_workspace(temp_dir)
 
-    vcf_1 = VCFFile(vcf_1_path)
-    vcf_2 = VCFFile(vcf_2_path)
+    short_read_vcf = VCFFile(short_read_vcf_path)
+    long_read_vcf = VCFFile(long_read_vcf_path)
     if output is None:
         if temp_dir is None:
             output = Path("ragged_concat.vcf.gz")
@@ -238,7 +329,7 @@ def ragged_concat(
             output = Path(temp_dir_path / "ragged_concat.vcf.gz")
 
     # compress if not already compressed
-    for vcf_file in [vcf_1, vcf_2]:
+    for vcf_file in [short_read_vcf, long_read_vcf]:
         if not vcf_file.compressed:
             vcf_file.compress(
                 output=Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz")
@@ -248,7 +339,7 @@ def ragged_concat(
 
         # rename samples using bcftools merge so that all samples between files being
         # merged are unique this is required if the `--force-samples` flag is not used
-        for file_idx, vcf_file in enumerate([vcf_1, vcf_2]):
+        for file_idx, vcf_file in enumerate([short_read_vcf, long_read_vcf]):
             vcf_file.reheader(
                 rename_dict=sample_rename[file_idx]
             )
@@ -257,7 +348,7 @@ def ragged_concat(
     # for concatenation
     to_concat = sorted(
         list(
-            set(vcf_1.samples).intersection(set(vcf_2.samples))
+            set(short_read_vcf.samples).intersection(set(long_read_vcf.samples))
         )
     )
 
@@ -265,16 +356,16 @@ def ragged_concat(
     # for merging
     to_merge = sorted(
         list(
-            set(vcf_1.samples).symmetric_difference(set(vcf_2.samples))
+            set(short_read_vcf.samples).symmetric_difference(set(long_read_vcf.samples))
         )
     )
 
     # concat the common samples, merge anything remaining
-    vcf_1_common_subset = vcf_subset(vcf_1, to_concat, output=Path(temp_dir_path), force=True)
-    vcf_2_common_subset = vcf_subset(vcf_2, to_concat, output=Path(temp_dir_path), force=True)
+    short_read_common_subset = vcf_subset(short_read_vcf, to_concat, output=Path(temp_dir_path), force=True)
+    long_read_common_subset = vcf_subset(long_read_vcf, to_concat, output=Path(temp_dir_path), force=True)
 
-    vcf_1_ragged_subset = vcf_subset(vcf_1, to_merge, output=Path(temp_dir_path), force=True)
-    vcf_2_ragged_subset = vcf_subset(vcf_2, to_merge, output=Path(temp_dir_path), force=True)
+    short_read_ragged_subset = vcf_subset(short_read_vcf, to_merge, output=Path(temp_dir_path), force=True)
+    long_read_ragged_subset = vcf_subset(long_read_vcf, to_merge, output=Path(temp_dir_path), force=True)
 
     concat_vcf_path = temp_dir_path / "concat.vcf.gz"
     subprocess.run(
@@ -282,8 +373,8 @@ def ragged_concat(
             "bcftools",
             "concat",
             "-a",
-            vcf_1_common_subset.path,
-            vcf_2_common_subset.path,
+            short_read_common_subset.path,
+            long_read_common_subset.path,
             "-o",
             concat_vcf_path,
             "-O",
@@ -293,7 +384,21 @@ def ragged_concat(
     )
     concat_vcf = VCFFile(concat_vcf_path)
 
-    for vcf_file in [vcf_1_ragged_subset, vcf_2_ragged_subset]:
+    concat_metadata, deduplicated_vcf = deduplicate_short_long_vcf(
+        concat_vcf.path,
+        short_read_common_subset.path,
+        long_read_common_subset.path
+    )
+
+    with open(concat_vcf.path.with_suffix(""), "w") as outfile:
+        outfile.write("\n".join(concat_metadata))
+        outfile.write("\n")
+        deduplicated_vcf.write_csv(outfile, include_header=True, separator="\t")
+
+    concat_vcf = VCFFile(concat_vcf.path.with_suffix(""))
+    concat_vcf.compress(keep=False)
+
+    for vcf_file in [short_read_ragged_subset, long_read_ragged_subset]:
         samples = vcf_file.samples
 
         if samples:
