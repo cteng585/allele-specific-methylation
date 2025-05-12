@@ -13,18 +13,6 @@ from src.vcf_processing.parse import explode_format, implode_format, parse_vcf_m
 from src.vcf_processing.utils import subset as vcf_subset
 
 
-def _setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
-    if temp_dir is None:
-        temp_dir = tempfile.TemporaryDirectory()
-        temp_dir_path = Path(temp_dir.name)
-    elif not Path(temp_dir).exists():
-        Path(temp_dir).mkdir(parents=True, exist_ok=False)
-        temp_dir_path = Path(temp_dir)
-    else:
-        temp_dir_path = Path(temp_dir)
-    return temp_dir_path
-
-
 def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]:
     """
     Read in the VCF non-data lines and split into the metadata and header portions
