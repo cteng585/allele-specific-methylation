@@ -1,251 +1,139 @@
-import os
-import subprocess
-import tempfile
 import warnings
-from dataclasses import dataclass, field
-from pathlib import Path
-from typing import Optional, Union
 
 import polars as pl
-
-from src.constants import VCF_BASE_HEADER
-from src.vcf_processing.models import VCFMetadata
+import pysam
 
 
-@dataclass
-class VCFFile:
-    path: Union[str, Path]
-    _compressed: bool = field(default=False, init=True)
-    _indexed: bool = field(default=False, init=True)
-    _reheadered: bool = field(default=False, init=True)
+class VCF:
+    def __init__(self, fp):
+        self.__bcf = pysam.VariantFile(fp)
+        self.__header = self.__bcf.header
+        self.__records: list[pysam.VariantRecord] = None
+        self.__filters: dict[str, pl.DataFrame] = {}
+        self.samples: list[str] = self.__bcf.header.samples
+        self.data: pl.DataFrame = None
+        self.__parse(fp)
 
-    def __post_init__(self):
-        self.path = Path(self.path)
-        if not self.path.exists():
-            raise ValueError(f"The VCF file {self.path} could not be found")
+    def __parse(self, fp):
+        header = str(self.header).splitlines()
 
-        if self.path.suffix == ".gz" and not self._compressed:
-            if not self._test_compression():
-                self.compress()
-            if not Path(self.path.parent / (self.path.name + ".vcf.gz.csi")).exists():
-                self.index()
-            if not self.compressed:
-                self.compressed = True
-
-    @property
-    def compressed(self):
-        return self._compressed
-
-    @compressed.setter
-    def compressed(self, value: bool) -> None:
-        self._compressed = value
-        return
-
-    @property
-    def compressed_index(self):
-        if self.compressed and self.indexed:
-            return self.path.with_suffix(".csi")
-        elif not self.compressed:
-            raise FileNotFoundError(
-                "The VCF file is not compressed and therefore does not have an index"
-            )
-        else:
-            raise FileNotFoundError(
-                "The VCF file is compressed but does not have an index"
-            )
+        self.data = pl.read_csv(
+            fp,
+            skip_rows=len(header) - 1,
+            schema={
+                "CHROM": pl.String,
+                "POS": pl.Int32,
+                "ID": pl.String,
+                "REF": pl.String,
+                "ALT": pl.String,
+                "QUAL": pl.Float32,
+                "FILTER": pl.String,
+                "INFO": pl.String,
+                "FORMAT": pl.String,
+                **{
+                    key: pl.String for key in self.samples
+                }
+            },
+            separator="\t",
+            ignore_errors=True,
+        ).with_row_index()
 
     @property
-    def indexed(self):
-        return self._indexed
+    def header(self):
+        return self.__header
 
     @property
-    def reheadered(self):
-        return self._reheadered
+    def filters(self):
+        return list(self.__filters.keys())
 
     @property
-    def samples(self) -> list[str]:
-        sample_query = subprocess.run(
-        [
-                "bcftools",
-                "query",
-                "-l",
-                self.path,
-            ],
-            check=True,
-            capture_output=True,
-        ).stdout.decode("utf-8").strip().split("\n")
+    def records(self):
+        """
+        lazy load the records from the VCF file. since it takes some time to read these, only
+        load them if they are needed
 
-        if [sample for sample in sample_query if sample]:
-            return sample_query
-        else:
-            return []
+        :return: a list of pysam.VariantRecord objects
+        """
+        if self.__records is None:
+            self.__records = [variant_record for variant_record in self.__bcf.fetch()]
+        return self.__records
 
-    def _test_compression(self):
-        if subprocess.run(
-            [
-                "bgzip",
-                "-t",
-                self.path
-            ],
-            capture_output=True,
-        ).stderr:
-            return False
-        else:
-            return True
+    @records.setter
+    def records(self, records):
+        self.__records = records
 
-    def compress(
-        self,
-        keep: Optional[bool] = True,
-        output: Optional[Union[str, Path]] = None
-    ) -> None:
-        if self.path.suffix == ".gz" or self.compressed:
-            warnings.warn(
-                "The VCF file is already compressed, not compressing again or generating a new file",
-                UserWarning
-            )
+    @records.deleter
+    def records(self):
+        del self.__records
+
+    def check_filters(self, filter_name):
+        return self.__filters[filter_name]
+
+    def pos(self, coordinates: str):
+        if not re.search(
+            r"(chr)?.*:\d+", coordinates, flags=re.IGNORECASE
+        ):
+            raise ValueError
+
+        chrom, pos = coordinates.split(":")
+        pos = int(pos)
+
+        return self.data.filter(
+            (pl.col("CHROM") == chrom) &
+            (pl.col("POS") == pos)
+        )
+
+    def make_filter(self, field_name):
+        if field_name in self.filters:
             return
 
-        if not output:
-            compression_args = [
-                "bgzip", self.path, "-f"
-            ]
-            self.path = self.path.with_suffix(".vcf.gz")
-        else:
-            compression_args = [
-                "bgzip", self.path, "-f", "-o", output
-            ]
-            self.path = output
-
-        if keep:
-            compression_args.append("-k")
-
-        subprocess.run(compression_args, check=True)
-        self.compressed = True
-        self.index()
-        return
-
-    def index(self) -> None:
-        subprocess.run(
-            [
-                "bcftools",
-                "index",
-                "-f",
-                self.path,
-            ],
-            check=True,
+        filter_table = self.data.select(
+            ["CHROM", "POS", "FORMAT", *self.samples]
+        ).with_columns(
+            pl.col("FORMAT").str.split(":")
+        ).filter(
+            pl.col("FORMAT").list.contains(field_name)
+        ).with_columns(
+            pl.col("FORMAT").map_elements(
+                lambda s: list(s).index(field_name),
+                return_dtype=pl.Int8,
+            ).alias(f"{field_name}_idx")
+        ).with_columns(
+            pl.col(*self.samples).str.split(":").list.get(pl.col(f"{field_name}_idx"))
+        ).filter(
+            ~pl.all_horizontal(pl.col(*self.samples) == ".")
         )
-        self._indexed = True
-        return
 
-    def reheader(self, rename_dict: dict[str, str]) -> None:
-        sample_rename_file = tempfile.NamedTemporaryFile(delete_on_close=False)
-        sample_rename = "\n".join(
-            [f"{old_name} {new_name}" for old_name, new_name in rename_dict.items()]
-        )
-        sample_rename_file.write(str.encode(sample_rename))
-        sample_rename_file.close()
+        self.__filters[field_name] = filter_table
 
-        # reheadering seems to use a streaming input since indexing a file that has been
-        # renamed to the same file name as the input can cause some sort of buffer error.
-        # instead of renaming the file in place, output to a temporary file and then
-        # rename to the original file
-        subprocess.run(
-            [
-                "bcftools",
-                "reheader",
-                self.path,
-                "-s",
-                sample_rename_file.name,
-                "-o",
-                self.path.parent / "tmp.vcf.gz",
-            ],
-            check=True,
-        )
-        subprocess.run(["mv", self.path.parent / "tmp.vcf.gz", self.path])
-        self._reheadered = True
-        self.index()
-
-        # cleanup the tempfile
-        os.remove(sample_rename_file.name)
-
-
-@dataclass
-class VCFData:
-    metadata: list[VCFMetadata]
-    data: Union[pl.DataFrame, pl.LazyFrame]
-    hp1: Union[pl.DataFrame, pl.LazyFrame] = field(default=None, init=True)
-    hp2: Union[pl.DataFrame, pl.LazyFrame] = field(default=None, init=True)
-    _raw: Union[pl.DataFrame, pl.LazyFrame] = field(default=None, init=False)
-    _input_type: type = field(default=None, init=False)
-    _exploded: bool = field(default=False, init=True)
-
-    def __post_init__(self):
-        if isinstance(self.data, pl.DataFrame):
-            self._raw = self.data.lazy()
-            self._input_type = pl.DataFrame
-        else:
-            self._raw = self.data
-            self._input_type = pl.LazyFrame
-
-    def explode_format(self):
-        """
-        Split the sample data in a VCF into separate columns for each FORMAT
-        field present in the VCF metadata
-        """
-        self._exploded = True
-
-        sample_fields = [
-            field for field in self.data.columns if field not in VCF_BASE_HEADER
-        ]
-
-        format_fields = [
-            field for field in self.metadata if field.MetadataType == "FormatField"
-        ]
-
-        if len(sample_fields) == 1:
-            self.data = self.data.with_columns(
-                [pl.col(sample_fields[0]).str.split(":").list.get(
-                    pl.col("FORMAT").str.split(":").list.eval(pl.element().index_of(field.ID)).list.get(0)
-                ).alias(field.ID) for field in format_fields]
-            )
-        else:
-            for sample_field in sample_fields:
-                self.data = self.data.with_columns(
-                    [pl.col(sample_field).str.split(":").list.get(
-                        pl.col("FORMAT").str.split(":").list.eval(pl.element().index_of(field.ID)).list.get(0)
-                    ).alias(f"{field.ID}_{sample_field}") for field in format_fields]
+    def filter(self, **kwargs):
+        filter_table = pl.DataFrame()
+        for filter_name, expression in kwargs.items():
+            if filter_name not in self.filters:
+                warnings.warn(
+                    message=(
+                        f"Filter {filter_name} does not already exist for this VCF object. Creating filter {filter_name}."
+                    ),
+                    category=UserWarning,
                 )
+                self.make_filter(filter_name)
 
-        self.data = self.data.drop(
-            [field for field in sample_fields] + ["FORMAT"]
-        )
+            if filter_table.is_empty():
+                filter_table = self.__filters[filter_name].filter(expression)
+                continue
+            elif isinstance(expression, bool):
+                join_table = self.__filters[filter_name]
+            else:
+                join_table = self.__filters[filter_name].filter(expression),
 
-    def reset(self):
-        if self._input_type == pl.DataFrame:
-            self.data = self._raw.collect()
-        else:
-            self.data = self._raw
+            filter_table = filter_table.join(
+                join_table,
+                on=["CHROM", "POS"],
+                how="inner",
+            )
 
-    def split_haplotype_variants(self):
-        if not self._exploded:
-            self.explode_format()
-
-        # only keep variants where genotype data is available and the variant is phased
-        self.data = self.data.filter(
-            (pl.col("GT") != ".") &
-            (pl.col("PS").is_not_null())
-        )
-
-        # get the variants that have an alt allele for the first haplotype
-        self.hp1 = self.data.filter(
-            pl.col("GT").str.contains(r"\|")
-        ).filter(
-            (pl.col("GT").str.split("|").list.get(0).cast(pl.Int16) != 0)
-        )
-
-        # get the variants that have an alt allele for the second haplotype
-        self.hp2 = self.data.filter(
-            pl.col("GT").str.contains(r"\|")
-        ).filter(
-            (pl.col("GT").str.split("|").list.get(1).cast(pl.Int16) != 0)
+        return self.data.join(
+            filter_table.select("CHROM", "POS").unique(),
+            on=["CHROM", "POS"],
+            how="inner",
         )
