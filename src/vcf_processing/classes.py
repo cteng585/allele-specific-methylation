@@ -1,4 +1,8 @@
+import gzip
+import re
 import warnings
+from pathlib import Path
+from typing import Literal, Optional, Union
 
 import polars as pl
 import pysam
@@ -12,14 +16,33 @@ class VCF:
         self.__filters: dict[str, pl.DataFrame] = {}
         self.samples: list[str] = self.__bcf.header.samples
         self.data: pl.DataFrame = None
+        self.path = fp
         self.__parse(fp)
 
     def __parse(self, fp):
         header = str(self.header).splitlines()
 
+        # need to peek the top two lines of the file to see if bcftools/pysam is adding lines to the header
+        match Path(fp).suffix:
+            case ".gz":
+                infile = gzip.open(fp)
+                check_lines = [next(infile).decode() for _ in range(2)]
+                infile.close()
+            case ".vcf":
+                infile = open(fp)
+                check_lines = [next(infile) for _ in range(2)]
+                infile.close()
+            case _:
+                raise NotImplementedError(f"File type {Path(fp).suffix} not supported")
+
+        if check_lines[1].startswith("##FILTER"):
+            num_skip_rows = len(header) - 1
+        else:
+            num_skip_rows = len(header)
+
         self.data = pl.read_csv(
             fp,
-            skip_rows=len(header) - 1,
+            skip_rows=num_skip_rows,
             schema={
                 "CHROM": pl.String,
                 "POS": pl.Int32,
@@ -137,3 +160,17 @@ class VCF:
             on=["CHROM", "POS"],
             how="inner",
         )
+
+    def write(self, path: Optional[Union[str, Path]], mode: Literal["wb", "w"]):
+        if not path:
+            path = self.path
+
+        vcf_out = pysam.VariantFile(
+            path,
+            mode,
+            header=self.header,
+        )
+
+        for record in self.records:
+            vcf_out.write(record)
+        vcf_out.close()
