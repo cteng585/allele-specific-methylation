@@ -1,3 +1,5 @@
+import os
+import subprocess
 import tempfile
 import warnings
 from pathlib import Path
@@ -72,7 +74,7 @@ def write_subset(
     vcf_out = pysam.VariantFile(
         output,
         "wb",
-        header=vcf_in.header,
+        header=vcf.header,
     )
     for record in vcf_in.fetch():
         vcf_out.write(record)
@@ -80,6 +82,41 @@ def write_subset(
     vcf_in.close()
 
     return output
+
+
+def reheader(vcf_fn: Union[str, Path], rename_dict: dict[str, str]) -> Path:
+    """
+    bcftools wrapper for reheader-ing a VCF and re-indexing the output if necessary
+
+    :param vcf_fn: the filename of the VCF to reheader
+    :param rename_dict: the samples to rename
+    :return: the Path to the reheadered VCF
+    """
+
+    vcf_fn = Path(vcf_fn)
+    output_fn = Path(vcf_fn.parent) / f"{vcf_fn.stem}.reheadered{vcf_fn.suffix}"
+
+    renaming_fp = tempfile.NamedTemporaryFile(delete=False)
+    for old_name, new_name in rename_dict.items():
+        renaming_fp.write(f"{old_name}\t{new_name}\n".encode("utf-8"))
+    renaming_fp.close()
+
+    subprocess.run(
+        [
+            "bcftools", "reheader", "-s", renaming_fp.name, "-o", output_fn, vcf_fn,
+        ]
+    )
+
+    if Path(output_fn).suffix == ".gz":
+        subprocess.run(
+            [
+                "bcftools", "index", output_fn
+            ]
+        )
+
+    os.remove(renaming_fp.name)
+
+    return Path(output_fn)
 
 
 def hamming(s0: Iterable, s1: Iterable) -> int:

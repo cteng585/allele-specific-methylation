@@ -188,20 +188,23 @@ class VCF:
         )
 
         match path.suffix:
-            case ".vcf":
-                with open(path, "w") as outfile:
-                    outfile.write("\n".join(header))
-                    outfile.write("\n")
+
+            # can't use the more efficient passing of a Path to .write_csv since the header will
+            # not be included
+            case ".gz":
+                with gzip.open(path, "wb") as outfile:
+                    outfile.write("\n".join(header).encode("utf-8"))
+                    outfile.write("\n".encode("utf-8"))
                     write_data.write_csv(
                         outfile,
                         include_header=True,
                         separator="\t",
                     )
 
-            case ".gz":
-                with gzip.open(path, "wb") as outfile:
-                    outfile.write("\n".join(header).encode("utf-8"))
-                    outfile.write("\n".encode("utf-8"))
+            case ".vcf":
+                with open(path, "w") as outfile:
+                    outfile.write("\n".join(header))
+                    outfile.write("\n")
                     write_data.write_csv(
                         outfile,
                         include_header=True,
