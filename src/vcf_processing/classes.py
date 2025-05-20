@@ -161,16 +161,52 @@ class VCF:
             how="inner",
         )
 
-    def write(self, path: Optional[Union[str, Path]], mode: Literal["wb", "w"]):
+    def write(
+        self,
+        path: Optional[Union[str, Path]],
+        samples: Optional[Union[str, list[str]]] = None
+    ):
         if not path:
-            path = self.path
+            path = Path(self.path)
+        else:
+            path = Path(path)
 
-        vcf_out = pysam.VariantFile(
-            path,
-            mode,
-            header=self.header,
+        if not samples:
+            samples = self.samples
+        elif isinstance(samples, str):
+            samples = [samples]
+
+        header = []
+        for idx, line in enumerate(str(self.header).splitlines()):
+            if idx < len(str(self.header).splitlines()) - 1:
+                header.append(line)
+
+        write_data = self.data.select(
+            pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *samples)
+        ).rename(
+            {"CHROM": "#CHROM"}
         )
 
-        for record in self.records:
-            vcf_out.write(record)
-        vcf_out.close()
+        match path.suffix:
+            case ".vcf":
+                with open(path, "w") as outfile:
+                    outfile.write("\n".join(header))
+                    outfile.write("\n")
+                    write_data.write_csv(
+                        outfile,
+                        include_header=True,
+                        separator="\t",
+                    )
+
+            case ".gz":
+                with gzip.open(path, "wb") as outfile:
+                    outfile.write("\n".join(header).encode("utf-8"))
+                    outfile.write("\n".encode("utf-8"))
+                    write_data.write_csv(
+                        outfile,
+                        include_header=True,
+                        separator="\t",
+                    )
+
+            case _:
+                raise NotImplementedError
