@@ -1,11 +1,10 @@
 import os
+import shutil
 import subprocess
+import sys
 import tempfile
-import warnings
 from pathlib import Path
-from typing import Iterable, Optional, Union
-
-import pysam
+from typing import Iterable, Union
 
 from src.vcf_processing.classes import VCF
 
@@ -29,61 +28,6 @@ def setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
     return temp_dir_path
 
 
-# TODO: this could theoretically be optimized to be faster using polars, but need to find
-# TODO: a way to make sure that any changes made to the VariantRecords are propagated to
-# TODO: the VCF object and dataframe
-def write_subset(
-    vcf: VCF,
-    samples: Union[str, list[str]],
-    output: Optional[Union[str, Path]] = None,
-) -> Union[Path, None]:
-    """
-    Use pysam to subset the VCF file
-
-    :param vcf: the VCF to subset
-    :param samples: the samples of the VCF to include in the subset
-    :param output: the path to save the subsetted VCF to
-    :return: a new VCF object with the subsetted samples
-    """
-    if not isinstance(samples, list):
-        samples = [samples]
-
-    if not set(samples).intersection(set(vcf.samples)):
-        warnings.warn(f"Samples {samples} not found in VCF {vcf.path}. Aborting subsetting.")
-        return None
-
-    output = Path(output)
-    if not output or output.is_dir():
-        subset_string = ".".join(
-            [sample for sample in samples if sample in vcf.samples]
-        )
-
-        if not output:
-            output = Path(vcf.path.parent / vcf.path.stem).with_suffix(
-                f".{subset_string}.vcf.gz"
-            )
-        else:
-            output = Path(output / vcf.path.stem).with_suffix(
-                f".{subset_string}.vcf.gz"
-            )
-
-    # need to re-open the VCF file to subset
-    vcf_in = pysam.VariantFile(vcf.path)
-    vcf_in.subset_samples(samples)
-
-    vcf_out = pysam.VariantFile(
-        output,
-        "wb",
-        header=vcf.header,
-    )
-    for record in vcf_in.fetch():
-        vcf_out.write(record)
-    vcf_out.close()
-    vcf_in.close()
-
-    return output
-
-
 def reheader(vcf_fn: Union[str, Path], rename_dict: dict[str, str]) -> Path:
     """
     bcftools wrapper for reheader-ing a VCF and re-indexing the output if necessary
@@ -92,6 +36,9 @@ def reheader(vcf_fn: Union[str, Path], rename_dict: dict[str, str]) -> Path:
     :param rename_dict: the samples to rename
     :return: the Path to the reheadered VCF
     """
+    if shutil.which("bcftools") is None:
+        print("Error: 'bcftools' is not installed or not in PATH.", file=sys.stderr)
+        sys.exit(1)
 
     vcf_fn = Path(vcf_fn)
     output_fn = Path(vcf_fn.parent) / f"{vcf_fn.stem}.reheadered{vcf_fn.suffix}"
@@ -128,3 +75,100 @@ def hamming(s0: Iterable, s1: Iterable) -> int:
     :return: the hamming distance between the two sequences
     """
     return sum(c0 != c1 for c0, c1 in zip(s0, s1))
+
+
+def compress(vcf_fn: Union[str, Path], force: bool = False) -> Union[Path, None]:
+    """
+    compress a VCF file using bgzip
+
+    :param vcf_fn: the filename of the VCF to compress
+    :param force: whether to force compression irrespective of whether the file already exists
+    :return: the compressed VCF file
+    """
+    if shutil.which("bgzip") is None:
+        print(f"Error: 'bgzip' is not installed or not in PATH.", file=sys.stderr)
+        sys.exit(1)
+
+    args = ["bgzip", vcf_fn] if not force else ["bgzip", "-f", vcf_fn]
+    try:
+        subprocess.run(args, check=True, capture_output=True)
+        return Path(f"{vcf_fn}.gz")
+
+    except subprocess.CalledProcessError as e:
+        if e.returncode == 2:
+            print(f"Error: compressed file {vcf_fn}.gz already exists.", file=sys.stderr)
+        else:
+            print(f"Error: {e.stderr.decode('utf-8')}", file=sys.stderr)
+
+
+def index(vcf_fn: Union[str, Path]) -> Path:
+    """
+    index a VCF file using bcftools
+
+    :param vcf_fn: the filename of the VCF to index
+    :return: the indexed VCF file
+    """
+    if shutil.which("bcftools") is None:
+        print(f"Error: 'bcftools' is not installed or not in PATH.", file=sys.stderr)
+        sys.exit(1)
+
+    subprocess.run(["bcftools", "index", vcf_fn], check=True, capture_output=True)
+    return Path(f"{vcf_fn}.csi")
+
+
+def concat(vcf_fns: list[Union[str, Path]], output: Union[str, Path]) -> Path:
+    """
+    bcftools concat wrapper for concatenating two VCF files
+
+    :param vcf_fns: list of VCF files to concatenate
+    :param output: VCF file to output
+    :return: the Path to the concatenated VCF
+    """
+    vcf_fns = [Path(vcf_fn) for vcf_fn in vcf_fns]
+
+    if len(vcf_fns) != 2:
+        raise ValueError("Only two VCFs can be concatenated")
+
+    if list(VCF(vcf_fns[0]).samples) != list(VCF(vcf_fns[1]).samples):
+        raise ValueError("Either the samples or the order of samples don't match between the VCFs to be concatenated")
+
+    # bcftools concat requires files to be compressed and indexed
+    for vcf_fn in vcf_fns:
+        if vcf_fn.suffix != ".gz":
+            raise ValueError(f"File {vcf_fn} is not compressed")
+
+    subprocess.run(["bcftools", "concat", "-a", "-o", output, vcf_fns[0], vcf_fns[1]])
+    if Path(output).suffix == ".gz":
+        index(output)
+
+    return output
+
+
+def subset(vcf_fn: Union[str, Path], samples: Union[str, list[str]]) -> Path:
+    """
+    bcftools wrapper for subsetting a VCF by sample name
+
+    :param vcf_fn: the filename of the VCF to subset
+    :param samples: the samples to subset
+    :return:
+    """
+    if shutil.which("bcftools") is None:
+        raise ValueError("bcftools not found in PATH")
+
+    vcf_fn = Path(vcf_fn)
+    output = ".".join(samples) if isinstance(samples, list) else samples
+    output = vcf_fn.parent / f"{str(vcf_fn).removesuffix("".join(vcf_fn.suffixes))}.{output}.vcf.gz"
+
+    if isinstance(samples, list):
+        samples = ",".join(samples)
+
+    args = ["bcftools", "view", "-s", samples, "-o", output, vcf_fn]
+
+    subset_output = subprocess.run(args, check=True, capture_output=True)
+
+    if subset_output.returncode != 0:
+        raise ValueError(f"bcftools returned error code {subset_output.returncode}")
+
+    index(output)
+
+    return output
