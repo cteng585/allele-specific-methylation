@@ -3,15 +3,14 @@ import shutil
 import subprocess
 import sys
 import tempfile
+from collections.abc import Iterable
 from pathlib import Path
-from typing import Iterable, Union
 
 from src.vcf_processing.classes import VCF
 
 
-def setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
-    """
-    Set up the workspace for the VCF processing. If a temp_dir is provided, use that. If not,
+def setup_workspace(temp_dir: str | Path | None) -> Path:
+    """Setup the workspace for the VCF processing. If a temp_dir is provided, use that. If not,
     create a temporary directory. If the temp_dir already exists, use that.
 
     :param temp_dir: the directory to use for the workspace
@@ -28,9 +27,8 @@ def setup_workspace(temp_dir: Union[str, Path, None]) -> Path:
     return temp_dir_path
 
 
-def reheader(vcf_fn: Union[str, Path], rename_dict: dict[str, str]) -> Path:
-    """
-    bcftools wrapper for reheader-ing a VCF and re-indexing the output if necessary
+def reheader(vcf_fn: str | Path, rename_dict: dict[str, str]) -> Path:
+    """Bcftools wrapper for reheader-ing a VCF and re-indexing the output if necessary
 
     :param vcf_fn: the filename of the VCF to reheader
     :param rename_dict: the samples to rename
@@ -45,20 +43,20 @@ def reheader(vcf_fn: Union[str, Path], rename_dict: dict[str, str]) -> Path:
 
     renaming_fp = tempfile.NamedTemporaryFile(delete=False)
     for old_name, new_name in rename_dict.items():
-        renaming_fp.write(f"{old_name}\t{new_name}\n".encode("utf-8"))
+        renaming_fp.write(f"{old_name}\t{new_name}\n".encode())
     renaming_fp.close()
 
     subprocess.run(
         [
             "bcftools", "reheader", "-s", renaming_fp.name, "-o", output_fn, vcf_fn,
-        ]
+        ], check=False,
     )
 
     if Path(output_fn).suffix == ".gz":
         subprocess.run(
             [
-                "bcftools", "index", output_fn
-            ]
+                "bcftools", "index", output_fn,
+            ], check=False,
         )
 
     os.remove(renaming_fp.name)
@@ -67,26 +65,24 @@ def reheader(vcf_fn: Union[str, Path], rename_dict: dict[str, str]) -> Path:
 
 
 def hamming(s0: Iterable, s1: Iterable) -> int:
-    """
-    Find the hamming distance between two sequences
+    """Find the hamming distance between two sequences
 
     :param s0: first sequence
     :param s1: second sequence
     :return: the hamming distance between the two sequences
     """
-    return sum(c0 != c1 for c0, c1 in zip(s0, s1))
+    return sum(c0 != c1 for c0, c1 in zip(s0, s1, strict=False))
 
 
-def compress(vcf_fn: Union[str, Path], force: bool = False) -> Union[Path, None]:
-    """
-    compress a VCF file using bgzip
+def compress(vcf_fn: str | Path, force: bool = False) -> Path | None:
+    """Compress a VCF file using bgzip
 
     :param vcf_fn: the filename of the VCF to compress
     :param force: whether to force compression irrespective of whether the file already exists
     :return: the compressed VCF file
     """
     if shutil.which("bgzip") is None:
-        print(f"Error: 'bgzip' is not installed or not in PATH.", file=sys.stderr)
+        print("Error: 'bgzip' is not installed or not in PATH.", file=sys.stderr)
         sys.exit(1)
 
     args = ["bgzip", vcf_fn] if not force else ["bgzip", "-f", vcf_fn]
@@ -101,24 +97,22 @@ def compress(vcf_fn: Union[str, Path], force: bool = False) -> Union[Path, None]
             print(f"Error: {e.stderr.decode('utf-8')}", file=sys.stderr)
 
 
-def index(vcf_fn: Union[str, Path]) -> Path:
-    """
-    index a VCF file using bcftools
+def index(vcf_fn: str | Path) -> Path:
+    """Index a VCF file using bcftools
 
     :param vcf_fn: the filename of the VCF to index
     :return: the indexed VCF file
     """
     if shutil.which("bcftools") is None:
-        print(f"Error: 'bcftools' is not installed or not in PATH.", file=sys.stderr)
+        print("Error: 'bcftools' is not installed or not in PATH.", file=sys.stderr)
         sys.exit(1)
 
     subprocess.run(["bcftools", "index", vcf_fn], check=True, capture_output=True)
     return Path(f"{vcf_fn}.csi")
 
 
-def concat(vcf_fns: list[Union[str, Path]], output: Union[str, Path]) -> Path:
-    """
-    bcftools concat wrapper for concatenating two VCF files
+def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
+    """Bcftools concat wrapper for concatenating two VCF files
 
     :param vcf_fns: list of VCF files to concatenate
     :param output: VCF file to output
@@ -137,16 +131,15 @@ def concat(vcf_fns: list[Union[str, Path]], output: Union[str, Path]) -> Path:
         if vcf_fn.suffix != ".gz":
             raise ValueError(f"File {vcf_fn} is not compressed")
 
-    subprocess.run(["bcftools", "concat", "-a", "-o", output, vcf_fns[0], vcf_fns[1]])
+    subprocess.run(["bcftools", "concat", "-a", "-o", output, vcf_fns[0], vcf_fns[1]], check=False)
     if Path(output).suffix == ".gz":
         index(output)
 
     return output
 
 
-def subset(vcf_fn: Union[str, Path], samples: Union[str, list[str]]) -> Path:
-    """
-    bcftools wrapper for subsetting a VCF by sample name
+def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
+    """Bcftools wrapper for subsetting a VCF by sample name
 
     :param vcf_fn: the filename of the VCF to subset
     :param samples: the samples to subset
