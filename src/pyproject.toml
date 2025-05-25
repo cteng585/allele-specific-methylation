@@ -24,8 +24,12 @@ line-length = 120
 [tool.ruff.lint]
 select = ["ALL"]
 extend-ignore = [
-    "ANN204",  # Do not require return type from __init__
-    "D203",  # Do not separate the docstring from the class definition
-    "D213",  # Multi-line docstring summary should start at the first line
-    "SIM108", # Do not replace simple if-else statements with ternary expressions for easy of reading
+    "ANN204",   # Do not require return type from __init__
+    "ANN401",   # Allow dynamically typed return types
+    "D203",     # Do not separate the docstring from the class definition
+    "D213",     # Multi-line docstring summary should start at the first line
+    "D400",     # First line doesn't need to end with a period
+    "D415",     # First line doesn't need punctuation at the end
+    "PLR0913",  # Do not require a maximum number of expressions in a list comprehension
+    "SIM108",   # Do not replace simple if-else statements with ternary expressions for easy of reading
 ]
