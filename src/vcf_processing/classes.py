@@ -2,14 +2,13 @@ import gzip
 import re
 import warnings
 from pathlib import Path
-from typing import Literal, Optional, Union
 
 import polars as pl
 import pysam
 
 
 class VCF:
-    def __init__(self, fp):
+    def __init__(self, fp: str | Path):
         self.__bcf = pysam.VariantFile(fp)
         self.__header = self.__bcf.header
         self.__records: list[pysam.VariantRecord] = None
@@ -19,21 +18,20 @@ class VCF:
         self.path = fp
         self.__parse(fp)
 
-    def __parse(self, fp):
+    def __parse(self, fp: str | Path) -> None:
         header = str(self.header).splitlines()
 
         # need to peek the top two lines of the file to see if bcftools/pysam is adding lines to the header
         match Path(fp).suffix:
             case ".gz":
-                infile = gzip.open(fp)
-                check_lines = [next(infile).decode() for _ in range(2)]
-                infile.close()
+                with gzip.open(fp) as infile:
+                    check_lines = [next(infile).decode() for _ in range(2)]
             case ".vcf":
-                infile = open(fp)
-                check_lines = [next(infile) for _ in range(2)]
-                infile.close()
+                with open(fp) as infile:
+                    check_lines = [next(infile) for _ in range(2)]
             case _:
-                raise NotImplementedError(f"File type {Path(fp).suffix} not supported")
+                file_type_suffix = Path(fp).suffix
+                raise NotImplementedError(f"File type {file_type_suffix} not supported")
 
         if check_lines[1].startswith("##FILTER"):
             num_skip_rows = len(header) - 1
@@ -53,9 +51,7 @@ class VCF:
                 "FILTER": pl.String,
                 "INFO": pl.String,
                 "FORMAT": pl.String,
-                **{
-                    key: pl.String for key in self.samples
-                }
+                **dict.fromkeys(self.samples, pl.String),
             },
             separator="\t",
             ignore_errors=True,
@@ -71,8 +67,7 @@ class VCF:
 
     @property
     def records(self):
-        """
-        lazy load the records from the VCF file. since it takes some time to read these, only
+        """Lazy load the records from the VCF file. since it takes some time to read these, only
         load them if they are needed
 
         :return: a list of pysam.VariantRecord objects
@@ -93,38 +88,32 @@ class VCF:
         return self.__filters[filter_name]
 
     def pos(self, coordinates: str):
-        if not re.search(
-            r"(chr)?.*:\d+", coordinates, flags=re.IGNORECASE
-        ):
+        if not re.search(r"(chr)?.*:\d+", coordinates, flags=re.IGNORECASE):
             raise ValueError
 
         chrom, pos = coordinates.split(":")
         pos = int(pos)
 
-        return self.data.filter(
-            (pl.col("CHROM") == chrom) &
-            (pl.col("POS") == pos)
-        )
+        return self.data.filter((pl.col("CHROM") == chrom) & (pl.col("POS") == pos))
 
     def make_filter(self, field_name):
         if field_name in self.filters:
             return
 
-        filter_table = self.data.select(
-            ["CHROM", "POS", "FORMAT", *self.samples]
-        ).with_columns(
-            pl.col("FORMAT").str.split(":")
-        ).filter(
-            pl.col("FORMAT").list.contains(field_name)
-        ).with_columns(
-            pl.col("FORMAT").map_elements(
-                lambda s: list(s).index(field_name),
-                return_dtype=pl.Int8,
-            ).alias(f"{field_name}_idx")
-        ).with_columns(
-            pl.col(*self.samples).str.split(":").list.get(pl.col(f"{field_name}_idx"))
-        ).filter(
-            ~pl.all_horizontal(pl.col(*self.samples) == ".")
+        filter_table = (
+            self.data.select(["CHROM", "POS", "FORMAT", *self.samples])
+            .with_columns(pl.col("FORMAT").str.split(":"))
+            .filter(pl.col("FORMAT").list.contains(field_name))
+            .with_columns(
+                pl.col("FORMAT")
+                .map_elements(
+                    lambda s: list(s).index(field_name),
+                    return_dtype=pl.Int8,
+                )
+                .alias(f"{field_name}_idx"),
+            )
+            .with_columns(pl.col(*self.samples).str.split(":").list.get(pl.col(f"{field_name}_idx")))
+            .filter(~pl.all_horizontal(pl.col(*self.samples) == "."))
         )
 
         self.__filters[field_name] = filter_table
@@ -135,7 +124,8 @@ class VCF:
             if filter_name not in self.filters:
                 warnings.warn(
                     message=(
-                        f"Filter {filter_name} does not already exist for this VCF object. Creating filter {filter_name}."
+                        f"Filter {filter_name} does not already exist for this VCF object. "
+                        f"Creating filter {filter_name}."
                     ),
                     category=UserWarning,
                 )
@@ -147,7 +137,7 @@ class VCF:
             elif isinstance(expression, bool):
                 join_table = self.__filters[filter_name]
             else:
-                join_table = self.__filters[filter_name].filter(expression),
+                join_table = (self.__filters[filter_name].filter(expression),)
 
             filter_table = filter_table.join(
                 join_table,
@@ -161,11 +151,7 @@ class VCF:
             how="inner",
         )
 
-    def write(
-        self,
-        path: Optional[Union[str, Path]],
-        samples: Optional[Union[str, list[str]]] = None
-    ):
+    def write(self, path: str | Path | None, samples: str | list[str] | None = None):
         if not path:
             path = Path(self.path)
         else:
@@ -182,19 +168,16 @@ class VCF:
                 header.append(line)
 
         write_data = self.data.select(
-            pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *samples)
-        ).rename(
-            {"CHROM": "#CHROM"}
-        )
+            pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *samples),
+        ).rename({"CHROM": "#CHROM"})
 
         match path.suffix:
-
             # can't use the more efficient passing of a Path to .write_csv since the header will
             # not be included
             case ".gz":
                 with gzip.open(path, "wb") as outfile:
                     outfile.write("\n".join(header).encode("utf-8"))
-                    outfile.write("\n".encode("utf-8"))
+                    outfile.write(b"\n")
                     write_data.write_csv(
                         outfile,
                         include_header=True,
