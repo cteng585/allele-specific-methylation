@@ -6,11 +6,11 @@ import tempfile
 from collections.abc import Iterable
 from pathlib import Path
 
-from src.vcf_processing.classes import VCF
+from src.vcf_processing.parse import read_vcf
 
 
 def setup_workspace(temp_dir: str | Path | None) -> Path:
-    """Setup the workspace for the VCF processing. If a temp_dir is provided, use that. If not,
+    """Set up the workspace for the VCF processing. If a temp_dir is provided, use that. If not,
     create a temporary directory. If the temp_dir already exists, use that.
 
     :param temp_dir: the directory to use for the workspace
@@ -123,7 +123,7 @@ def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
     if len(vcf_fns) != 2:
         raise ValueError("Only two VCFs can be concatenated")
 
-    if list(VCF(vcf_fns[0]).samples) != list(VCF(vcf_fns[1]).samples):
+    if list(read_vcf(vcf_fns[0]).samples) != list(read_vcf(vcf_fns[1]).samples):
         raise ValueError("Either the samples or the order of samples don't match between the VCFs to be concatenated")
 
     # bcftools concat requires files to be compressed and indexed
@@ -131,7 +131,7 @@ def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
         if vcf_fn.suffix != ".gz":
             raise ValueError(f"File {vcf_fn} is not compressed")
 
-    subprocess.run(["bcftools", "concat", "-a", "-o", output, vcf_fns[0], vcf_fns[1]], check=False)
+    subprocess.run(["bcftools", "concat", "-a", "-o", output, "--no-version", vcf_fns[0], vcf_fns[1]], check=False)
     if Path(output).suffix == ".gz":
         index(output)
 
@@ -140,6 +140,10 @@ def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
 
 def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
     """Bcftools wrapper for subsetting a VCF by sample name
+
+    The subset name is the name of the original VCF with the sample names appended to it
+    e.g. if the original VCF is `variants.vcf.gz` and the sample names are `sample1` and `sample2`,
+    the subset name will be `variants.sample1.sample2.vcf.gz`
 
     :param vcf_fn: the filename of the VCF to subset
     :param samples: the samples to subset
@@ -155,7 +159,7 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
     if isinstance(samples, list):
         samples = ",".join(samples)
 
-    args = ["bcftools", "view", "-s", samples, "-o", output, vcf_fn]
+    args = ["bcftools", "view", "-s", samples, "-o", output, "--no-version", vcf_fn]
 
     subset_output = subprocess.run(args, check=True, capture_output=True)
 

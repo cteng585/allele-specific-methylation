@@ -1,5 +1,7 @@
 import gzip
+import os
 import re
+import tempfile
 import warnings
 from pathlib import Path
 
@@ -8,54 +10,83 @@ import pysam
 
 
 class VCF:
-    def __init__(self, fp: str | Path):
-        self.__bcf = pysam.VariantFile(fp)
-        self.__header = self.__bcf.header
-        self.__records: list[pysam.VariantRecord] = None
+    def __init__(
+        self,
+        data: pl.DataFrame,
+        header: pysam.VariantHeader = None,
+        path: str | Path | None = None,
+        bcf: pysam.VariantFile | None = None,
+    ):
+        self.__bcf: pysam.VariantFile | None = bcf
+        self.__header: pysam.VariantHeader | None = header
+        self.__records: list[pysam.VariantRecord] | None = None
         self.__filters: dict[str, pl.DataFrame] = {}
-        self.samples: list[str] = self.__bcf.header.samples
-        self.data: pl.DataFrame = None
-        self.path = fp
-        self.__parse(fp)
+        self.__has_tempfiles: bool = False
+        self.__managed_files: list[tuple[Path, bool]] = []
+        self.__path: Path | None = Path(path) if path else None
+        self.samples: list[str] | None = None
+        self.data: pl.DataFrame | None = data
+        self.__post_init()
 
-    def __parse(self, fp: str | Path) -> None:
-        header = str(self.header).splitlines()
+    def __del__(self):
+        if self.__has_tempfiles:
+            for fp in set(self.__managed_files):
+                if fp[0].exists() and fp[1]:
+                    try:
+                        os.remove(fp[0])
+                    except FileNotFoundError:
+                        warnings.warn(
+                            message=f"Temporary file {fp[0]} not found. It may have already been deleted.",
+                            category=UserWarning,
+                        )
+            self.__has_tempfiles = False
+        return
 
-        # need to peek the top two lines of the file to see if bcftools/pysam is adding lines to the header
-        match Path(fp).suffix:
-            case ".gz":
-                with gzip.open(fp) as infile:
-                    check_lines = [next(infile).decode() for _ in range(2)]
-            case ".vcf":
-                with open(fp) as infile:
-                    check_lines = [next(infile) for _ in range(2)]
-            case _:
-                file_type_suffix = Path(fp).suffix
-                raise NotImplementedError(f"File type {file_type_suffix} not supported")
+    def __post_init(self):
+        if self.__bcf:
+            self.__header = self.__bcf.header
+            self.samples = self.__bcf.header.samples
+            self.path = Path(self.__bcf.filename.decode()) if not self.path else self.path
 
-        if check_lines[1].startswith("##FILTER"):
-            num_skip_rows = len(header) - 1
+        elif self.path:
+            self.__bcf = pysam.VariantFile(self.path)
+            self.__header = self.__bcf.header
+            self.samples = self.__bcf.header.samples
+
         else:
-            num_skip_rows = len(header)
+            if self.__header is None:
+                raise ValueError("Header must be provided if no BCF object is given.")
 
-        self.data = pl.read_csv(
-            fp,
-            skip_rows=num_skip_rows,
-            schema={
-                "CHROM": pl.String,
-                "POS": pl.Int32,
-                "ID": pl.String,
-                "REF": pl.String,
-                "ALT": pl.String,
-                "QUAL": pl.Float32,
-                "FILTER": pl.String,
-                "INFO": pl.String,
-                "FORMAT": pl.String,
-                **dict.fromkeys(self.samples, pl.String),
-            },
-            separator="\t",
-            ignore_errors=True,
-        ).with_row_index()
+            self.samples = self.__header.samples
+
+            # if the bcf doesn't exist, create a tempfile that stores the data
+            # and create a pysam.VariantFile object from that
+            self.__has_tempfiles = True
+            temp_bcf = tempfile.NamedTemporaryFile(delete=False)
+            temp_bcf.close()
+            self.path = Path(temp_bcf.name)
+            self.__managed_files.append((self.path, True))
+
+            # add the presumed path of the VCF file index if the VCF is a compressed tempfile
+            # to try to clean up the index file on garbage collection
+            self.__managed_files.append((self.path.with_suffix(".gz"), True))
+            self.__managed_files.append((self.path.with_suffix(".gz.csi"), True))
+            self.__managed_files.append((self.path.with_suffix(".gz.tbi"), True))
+
+            write_data = self.data.select(
+                pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *self.samples),
+            )
+
+            with open(self.path, "w") as outfile:
+                outfile.write(str(self.__header))
+                write_data.write_csv(
+                    outfile,
+                    include_header=False,
+                    separator="\t",
+                )
+
+            self.__bcf = pysam.VariantFile(self.path)
+        return
 
     @property
     def header(self):
