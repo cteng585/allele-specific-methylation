@@ -115,7 +115,37 @@ class VCF:
     def records(self):
         del self.__records
 
+    @property
+    def path(self):
+        return self.__path
+
+    @path.setter
+    def path(self, path: str | Path | None):
+        if path is None:
+            self.__path = None
+        elif isinstance(path, str):
+            self.__path = Path(path)
+        elif isinstance(path, Path):
+            self.__path = path
+        else:
+            raise TypeError(f"Expected str or Path, got {type(path)}")
+
+        if self.__has_tempfiles:
+            self.__managed_files.append((self.path, True))
+            warnings.warn(
+                category=UserWarning,
+                message=(
+                    f"The underlying VCF file for this VCF object is temporary. Setting a path "
+                    f"for this object will not persist and there will be an attempt to clean up "
+                    f"the new path {self.path} on garbage collection."
+                ),
+            )
+
+
     def check_filters(self, filter_name):
+        if filter_name not in self.__filters:
+            raise ValueError(f"Filter {filter_name} does not exist for this VCF object. "
+                             f"Please create it first using the make_filter method.")
         return self.__filters[filter_name]
 
     def pos(self, coordinates: str):
@@ -200,7 +230,7 @@ class VCF:
 
         write_data = self.data.select(
             pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *samples),
-        ).rename({"CHROM": "#CHROM"})
+        ).sort(by=["CHROM", "POS"]).rename({"CHROM": "#CHROM"})
 
         match path.suffix:
             # can't use the more efficient passing of a Path to .write_csv since the header will
