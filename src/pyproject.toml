@@ -30,6 +30,13 @@ extend-ignore = [
     "D213",     # Multi-line docstring summary should start at the first line
     "D400",     # First line doesn't need to end with a period
     "D415",     # First line doesn't need punctuation at the end
+    "RET504",   # Allow assignment of variable right before returning from function
     "PLR0913",  # Do not require a maximum number of expressions in a list comprehension
+    "PTH107",   # Do not suggest that `os.remove` be replaced by `Path.unlink`
+    "PTH123",   # Do not suggest that `with open` be replaced by `Path.open`
     "SIM108",   # Do not replace simple if-else statements with ternary expressions for easy of reading
+    "SIM115",   # Do not always require use of a context manager
+    "S603",     # Subprocess execution check for safety
+    "TRY002",   # Do not suggest that a specific Exception type be made
+    "TRY003",   # Do not suggest limit to exception message length
 ]
