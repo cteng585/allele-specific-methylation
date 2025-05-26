@@ -1,4 +1,3 @@
-import gzip
 import os
 import re
 import tempfile
@@ -7,6 +6,7 @@ from pathlib import Path
 
 import polars as pl
 import pysam
+from Bio import bgzf
 
 
 class VCF:
@@ -238,19 +238,14 @@ class VCF:
             # can't use the more efficient passing of a Path to .write_csv since the header will
             # not be included
             case ".gz":
-                with gzip.open(path, "wb") as outfile:
-                    outfile.write("\n".join(header).encode("utf-8"))
-                    outfile.write(b"\n")
-                    write_data.write_csv(
-                        outfile,
-                        include_header=True,
-                        separator="\t",
-                    )
+                with bgzf.BgzfWriter(path, "wb") as outfile:
+                    outfile.write(str(header))
+                    for row in write_data.rows():
+                        outfile.write("\t".join(str(value) for value in row).encode())
 
             case ".vcf":
                 with open(path, "w") as outfile:
-                    outfile.write("\n".join(header))
-                    outfile.write("\n")
+                    outfile.write(str(header))
                     write_data.write_csv(
                         outfile,
                         include_header=True,
