@@ -40,7 +40,6 @@ class VCF:
                             category=UserWarning,
                         )
             self.__has_tempfiles = False
-        return
 
     def __post_init(self):
         if self.__bcf:
@@ -86,7 +85,6 @@ class VCF:
                 )
 
             self.__bcf = pysam.VariantFile(self.path)
-        return
 
     @property
     def header(self):
@@ -97,9 +95,10 @@ class VCF:
         return list(self.__filters.keys())
 
     @property
-    def records(self):
-        """Lazy load the records from the VCF file. since it takes some time to read these, only
-        load them if they are needed
+    def records(self) -> list[pysam.VariantRecord]:
+        """Lazy load the records from the VCF file
+
+        Since it takes some time to read these, only load them if they are needed
 
         :return: a list of pysam.VariantRecord objects
         """
@@ -144,8 +143,11 @@ class VCF:
 
     def check_filters(self, filter_name):
         if filter_name not in self.__filters:
-            raise ValueError(f"Filter {filter_name} does not exist for this VCF object. "
-                             f"Please create it first using the make_filter method.")
+            msg = (
+                f"Filter {filter_name} does not exist for this VCF object. "
+                f"Please create it first using the make_filter method."
+            )
+            raise ValueError(msg)
         return self.__filters[filter_name]
 
     def pos(self, coordinates: str):
@@ -195,7 +197,7 @@ class VCF:
             if filter_table.is_empty():
                 filter_table = self.__filters[filter_name].filter(expression)
                 continue
-            elif isinstance(expression, bool):
+            if isinstance(expression, bool):
                 join_table = self.__filters[filter_name]
             else:
                 join_table = (self.__filters[filter_name].filter(expression),)

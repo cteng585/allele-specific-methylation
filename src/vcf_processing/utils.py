@@ -1,7 +1,6 @@
 import os
 import shutil
 import subprocess
-import sys
 import tempfile
 from collections.abc import Iterable
 from pathlib import Path
@@ -10,8 +9,10 @@ from src.vcf_processing.parse import read_vcf
 
 
 def setup_workspace(temp_dir: str | Path | None) -> Path:
-    """Set up the workspace for the VCF processing. If a temp_dir is provided, use that. If not,
-    create a temporary directory. If the temp_dir already exists, use that.
+    """Set up the workspace for the VCF processing
+
+    If a temp_dir is provided, use that. If not, create a temporary directory.
+    If the temp_dir already exists, use that.
 
     :param temp_dir: the directory to use for the workspace
     :return: the path to the workspace
@@ -35,8 +36,8 @@ def reheader(vcf_fn: str | Path, rename_dict: dict[str, str]) -> Path:
     :return: the Path to the reheadered VCF
     """
     if shutil.which("bcftools") is None:
-        print("Error: 'bcftools' is not installed or not in PATH.", file=sys.stderr)
-        sys.exit(1)
+        msg = "Error: 'bcftools' is not installed or not in PATH."
+        raise OSError(msg)
 
     vcf_fn = Path(vcf_fn)
     output_fn = Path(vcf_fn.parent) / f"{vcf_fn.stem}.reheadered{vcf_fn.suffix}"
@@ -74,27 +75,28 @@ def hamming(s0: Iterable, s1: Iterable) -> int:
     return sum(c0 != c1 for c0, c1 in zip(s0, s1, strict=False))
 
 
-def compress(vcf_fn: str | Path, force: bool = False) -> Path | None:
+def compress(vcf_fn: str | Path, overwrite: bool = False) -> Path | None:
     """Compress a VCF file using bgzip
 
     :param vcf_fn: the filename of the VCF to compress
-    :param force: whether to force compression irrespective of whether the file already exists
+    :param overwrite: whether to force compression irrespective of whether the file already exists
     :return: the compressed VCF file
     """
     if shutil.which("bgzip") is None:
-        print("Error: 'bgzip' is not installed or not in PATH.", file=sys.stderr)
-        sys.exit(1)
+        msg = "Error: 'bgzip' is not installed or not in PATH."
+        raise OSError(msg)
 
-    args = ["bgzip", vcf_fn] if not force else ["bgzip", "-f", vcf_fn]
+    args = ["bgzip", vcf_fn] if not overwrite else ["bgzip", "-f", vcf_fn]
     try:
         subprocess.run(args, check=True, capture_output=True)
         return Path(f"{vcf_fn}.gz")
 
     except subprocess.CalledProcessError as e:
         if e.returncode == 2:
-            print(f"Error: compressed file {vcf_fn}.gz already exists.", file=sys.stderr)
-        else:
-            print(f"Error: {e.stderr.decode('utf-8')}", file=sys.stderr)
+            msg = f"Error: compressed file {vcf_fn}.gz already exists."
+            raise FileExistsError(msg) from e
+        msg = f"Error: {e.stderr.decode('utf-8')}"
+        raise Exception(msg) from e
 
 
 def index(vcf_fn: str | Path) -> Path:
@@ -104,8 +106,8 @@ def index(vcf_fn: str | Path) -> Path:
     :return: the indexed VCF file
     """
     if shutil.which("bcftools") is None:
-        print("Error: 'bcftools' is not installed or not in PATH.", file=sys.stderr)
-        sys.exit(1)
+        msg = "Error: 'bcftools' is not installed or not in PATH."
+        raise OSError(msg)
 
     subprocess.run(["bcftools", "index", vcf_fn], check=True, capture_output=True)
     return Path(f"{vcf_fn}.csi")
@@ -118,18 +120,26 @@ def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
     :param output: VCF file to output
     :return: the Path to the concatenated VCF
     """
+    if shutil.which("bcftools") is None:
+        msg = "Error: 'bcftools' is not installed or not in PATH."
+        raise OSError(msg)
+
     vcf_fns = [Path(vcf_fn) for vcf_fn in vcf_fns]
 
-    if len(vcf_fns) != 2:
-        raise ValueError("Only two VCFs can be concatenated")
+    max_concat_vcfs = 2
+    if len(vcf_fns) != max_concat_vcfs:
+        msg = "Only two VCFs can be concatenated"
+        raise ValueError(msg)
 
     if list(read_vcf(vcf_fns[0]).samples) != list(read_vcf(vcf_fns[1]).samples):
-        raise ValueError("Either the samples or the order of samples don't match between the VCFs to be concatenated")
+        msg = "Either the samples or the order of samples don't match between the VCFs to be concatenated"
+        raise ValueError(msg)
 
     # bcftools concat requires files to be compressed and indexed
     for vcf_fn in vcf_fns:
         if vcf_fn.suffix != ".gz":
-            raise ValueError(f"File {vcf_fn} is not compressed")
+            msg = f"File {vcf_fn} is not compressed"
+            raise ValueError(msg)
 
     subprocess.run(["bcftools", "concat", "-a", "-o", output, "--no-version", vcf_fns[0], vcf_fns[1]], check=False)
     if Path(output).suffix == ".gz":
@@ -150,7 +160,8 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
     :return:
     """
     if shutil.which("bcftools") is None:
-        raise ValueError("bcftools not found in PATH")
+        msg = "Error: 'bcftools' is not installed or not in PATH."
+        raise OSError(msg)
 
     vcf_fn = Path(vcf_fn)
     output = ".".join(samples) if isinstance(samples, list) else samples
@@ -164,7 +175,8 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
     subset_output = subprocess.run(args, check=True, capture_output=True)
 
     if subset_output.returncode != 0:
-        raise ValueError(f"bcftools returned error code {subset_output.returncode}")
+        msg = f"bcftools returned error code {subset_output.returncode}"
+        raise ValueError(msg)
 
     index(output)
 
@@ -178,22 +190,30 @@ def merge(vcf_fns: list[str | Path], output: str | Path) -> Path:
     :param output: VCF file to output
     :return: the Path to the merged VCF
     """
+    if shutil.which("bcftools") is None:
+        msg = "Error: 'bcftools' is not installed or not in PATH."
+        raise OSError(msg)
+
     vcf_fns = [Path(vcf_fn) for vcf_fn in vcf_fns]
 
-    if len(vcf_fns) != 2:
-        raise ValueError("Only two VCFs can be merged")
+    max_merge_vcfs = 2
+    if len(vcf_fns) != max_merge_vcfs:
+        msg = "Only two VCFs can be merged"
+        raise ValueError(msg)
 
     if set(read_vcf(vcf_fns[0]).samples).intersection(read_vcf(vcf_fns[1]).samples):
-        raise ValueError("The VCF merge operation expects the two VCFs to have no overlapping samples")
+        msg = "The VCF merge operation expects the two VCFs to have no overlapping samples"
+        raise ValueError(msg)
 
     args = [
-        "bcftools", "merge", "-o", output, "--no-version", str(vcf_fns[0]), str(vcf_fns[1])
+        "bcftools", "merge", "-o", output, "--no-version", str(vcf_fns[0]), str(vcf_fns[1]),
     ]
 
     merge_output = subprocess.run(args, check=True, capture_output=True)
 
     if merge_output.returncode != 0:
-        raise ValueError(f"bcftools returned error code {merge_output.returncode}")
+        msg = f"bcftools returned error code {merge_output.returncode}"
+        raise ValueError(msg)
 
     if Path(output).suffix == ".gz":
         index(output)

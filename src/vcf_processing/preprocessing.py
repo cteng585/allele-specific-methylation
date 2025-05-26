@@ -1,5 +1,5 @@
 
-from typing import Any, Optional, Union
+from typing import Any, Optional
 
 import polars as pl
 from src.vcf_processing.classes import VCF
@@ -67,7 +67,7 @@ def update_variant_gt(
                     formatted_field_value = ",".join(
                         f"{value:.2f}" if isinstance(value, float) else str(value) for value in field_value
                     )
-                elif isinstance(field_value, Union[int, float]) and field_value == 0:
+                elif isinstance(field_value, int | float) and field_value == 0:
                     formatted_field_value = "0"
                 elif isinstance(field_value, float):
                     formatted_field_value = f"{field_value:.2f}"
@@ -96,7 +96,8 @@ def find_max_dp_gt(variant_group: pl.DataFrame | pl.LazyFrame) -> tuple[str, str
     )
 
     if len(max_dp_gt) > 1:
-        raise ValueError("Multiple genotypes with the same maximum DP found.")
+        msg = "Multiple genotypes with the same maximum DP found."
+        raise ValueError(msg)
     ref_update = max_dp_gt[0]["REF"]
     alt_update = max_dp_gt[0]["ALT"]
     genotype_update = max_dp_gt[0]["GT"]
@@ -190,7 +191,7 @@ def deduplicate_gt(source_vcf: VCF, variant_group: pl.DataFrame, sample: str) ->
 
         # remove the columns that were used to deduplicate the genotype
         .drop(
-            ["GT", "DP", "UPDATE"]
+            ["GT", "DP", "UPDATE"],
         )
     )
 

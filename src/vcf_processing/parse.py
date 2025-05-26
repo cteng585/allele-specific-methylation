@@ -3,11 +3,15 @@ from pathlib import Path
 
 import polars as pl
 import pysam
-
 from src.vcf_processing.classes import VCF
 
 
-def read_vcf(source: str | Path):
+def read_vcf(source: str | Path) -> VCF:
+    """Read a VCF file into a VCF object
+
+    :param source: the path to the VCF file to read, can be a gzipped VCF or a plain text VCF
+    :return: the VCF object containing the data and underlying metadata
+    """
     bcf = pysam.VariantFile(source)
     header = str(bcf.header).splitlines()
     samples = bcf.header.samples
@@ -22,7 +26,8 @@ def read_vcf(source: str | Path):
                 check_lines = [next(infile) for _ in range(2)]
         case _:
             file_type_suffix = Path(source).suffix
-            raise NotImplementedError(f"File type {file_type_suffix} not supported")
+            msg = f"File type {file_type_suffix} not supported"
+            raise NotImplementedError(msg)
 
     if check_lines[1].startswith("##FILTER"):
         num_skip_rows = len(header) - 1
