@@ -1,430 +1,198 @@
-import re
-import subprocess
-import tempfile
-from pathlib import Path
-from typing import Optional, Tuple, Union
+
+from typing import Any, Optional, Union
 
 import polars as pl
-import polars.selectors as cs
-
-from src.constants import VCF_BASE_HEADER
-from src.vcf_processing.classes import VCFFile
-from src.vcf_processing.parse import explode_format, implode_format, parse_vcf_metadata
-from src.vcf_processing.utils import subset as vcf_subset
+from src.vcf_processing.classes import VCF
 
 
-def read_vcf_metadata(vcf_path: Union[str, Path]) -> Tuple[list[str], list[str]]:
+# --------------------- #
+# Variant Deduplication #
+# --------------------- #
+def get_variant_data(source_vcf: VCF, record_idx: int, field: str, sample: str) -> Any | None:
+    """Get the variant data for a given record index, sample, and field from the source VCF
+
+    the source of truth is what pysam parses from the VCF file
+
+    :param source_vcf: the source VCF object to fetch variant records from
+    :param record_idx: the index of the record to fetch data from
+    :param field: the variant field to fetch data from
+    :param sample: the sample to fetch data from
+    :return: the variant data for the given record index, sample, and field
     """
-    Read in the VCF non-data lines and split into the metadata and header portions
+    if field in source_vcf.records[record_idx].samples[sample]:
+        return source_vcf.records[record_idx].samples[sample][field]
+    return None
 
-    :param vcf_path: the path to the VCF file to split as either a string or Path object
-    :return: a tuple containing the metadata and data portions of the VCF file
+
+def update_variant_gt(
+    source_vcf: VCF,
+    record_idx: int,
+    ref: str,
+    alt: str,
+    new_gt: list[int, int],
+    sample: str,
+) -> tuple[str, str]:
+    """Update the genotype for a given record index and sample in the source VCF
+
+    :param source_vcf: the source VCF object to update
+    :param record_idx: the index of the variant record to update
+    :param ref: the new reference allele corresponding to the updated genotype
+    :param alt: the new alt allele(s) corresponding to the updated genotype
+    :param new_gt: the updated genotype
+    :param sample: the sample to update the genotype for
+    :return: a tuple of the FORMAT and sample data strings for the updated record
     """
-    vcf_path = Path(vcf_path)
+    record = source_vcf.records[record_idx]
+    record.alleles = (ref, *[allele.strip() for allele in alt.split(",")])
 
-    if isinstance(vcf_path, Path) and not vcf_path.exists():
-        raise ValueError(f"The VCF file {vcf_path} could not be found")
+    # record unphased since combining VCFs makes any pre-existing phase blocks irrelevant
+    record.samples[sample]["GT"] = new_gt
 
-    metadata = subprocess.run(
-        ["bcftools", "head", vcf_path], check=True, capture_output=True
-    ).stdout.decode("utf-8").strip()
+    # cannot set phased before genotype is set
+    record.samples[sample].phased = False
 
-    metadata, header = metadata.splitlines()[:-1], metadata.splitlines()[-1].split("\t")
+    data_format, sample_data = [], []
+    for field, field_value in record.samples[sample].items():
+        data_format.append(field)
 
-    return metadata, header
+        match field:
+            case "GT":
+                # format to match the fact that the genotype is unphased
+                formatted_field_value = "/".join(str(value) for value in field_value)
+
+            case _:
+                if field_value == (None,) or field_value is None:
+                    formatted_field_value = "."
+                elif isinstance(field_value, tuple):
+                    formatted_field_value = ",".join(
+                        f"{value:.2f}" if isinstance(value, float) else str(value) for value in field_value
+                    )
+                elif isinstance(field_value, Union[int, float]) and field_value == 0:
+                    formatted_field_value = "0"
+                elif isinstance(field_value, float):
+                    formatted_field_value = f"{field_value:.2f}"
+                else:
+                    formatted_field_value = str(field_value)
+
+        sample_data.append(formatted_field_value)
+
+    return ":".join(data_format), ":".join(sample_data)
 
 
-# TODO: add support for compressed VCF
-def read_vcf_data(vcf_path: Union[str, Path], metadata: list[str], header: list[str]) -> pl.DataFrame:
+def find_max_dp_gt(variant_group: pl.DataFrame | pl.LazyFrame) -> tuple[str, str, list[int, int]]:
+    """Find the genotype that corresponds to the variant record with the highest read depth
+
+    this is per variant group
+
+    :param variant_group: the variant group to find the max read depth (DP) genotype for
+    :return: the reference allele, alt allele(s), and genotype for the variant record with
+        the highest read depth
     """
-    Read in the VCF data as a polars DataFrame
+    max_dp_gt = (
+        variant_group
+        .filter((pl.col("GT") != []) & (pl.col("GT") != [None]))
+        .filter(pl.col("DP") == pl.col("DP").max())
+        .select("REF", "ALT", "GT").to_dicts()
+    )
 
-    :param vcf_path: the path to the VCF file to read in
-    :param metadata: the metadata lines in the VCF file. used to skip the
-        metadata since it isn't tab/comma separated
-    :return: the VCF data as a polars DataFrame
+    if len(max_dp_gt) > 1:
+        raise ValueError("Multiple genotypes with the same maximum DP found.")
+    ref_update = max_dp_gt[0]["REF"]
+    alt_update = max_dp_gt[0]["ALT"]
+    genotype_update = max_dp_gt[0]["GT"]
+    return ref_update, alt_update, genotype_update
+
+
+def deduplicate_gt(source_vcf: VCF, variant_group: pl.DataFrame, sample: str) -> pl.DataFrame:
+    """Deduplicate the genotype for a given variant group
+
+    There are four possible cases for duplicate genotypes that need to be handled:
+        1. all duplicates have genotypes and they all agree
+        2. all duplicates have genotypes, they are all heterozygous with the same alleles, but
+            which allele is the reference and which is the alternate is different
+        3. all duplicates have genotypes, but they are all different
+        4. some duplicates have genotypes and some do not
+
+    Duplication should only occur in cases where VCFs are concatenated; most workflows should have
+    already eliminated duplicate variants
+
+    Thus in all cases, the deduplication approach is the same: the genotype with the highest read
+    depth (DP) is kept. This is because:
+        1. if all duplicates have genotypes and they all agree, then there is no harm in
+            keeping the variant record with the highest read depth
+        2. if all duplicates are heterozygous with discordant allele assignment, then the
+            same alleles are present and phasing doesn't matter since combining VCFs obliterates
+            any phase blocks any ways
+        3 & 4. if all genotypes are discordant (mix of homogyzous, heterozygous, and missing),
+            then the record with the highest read depth is more likely to be the correct one
+
+    :param source_vcf: the source VCF object to fetch variant records from
+    :param variant_group: the variant group to deduplicate the genotype for, grouped by
+        the chromosome and position of the variant
+    :param sample: the sample to deduplicate the genotype for
+    :return: the deduplicated variant group as a polars DataFrame
     """
-    vcf_path = Path(vcf_path)
+    # need to pre-emptively make sure that the records from the VCF are already fetched
+    # if this isn't done, it appears that there's some sort of read/write collision
+    # in the `get_variant_data` step that causes the file to be treated as truncated
+    # and the operation fails
+    _ = source_vcf.records
 
-    if isinstance(vcf_path, Path) and not vcf_path.exists():
-        raise ValueError(f"The VCF file {vcf_path} could not be found")
+    variant_group = variant_group.with_columns(
+        pl.col("index").map_elements(
+            lambda idx: get_variant_data(source_vcf, idx, "GT", sample),
+            return_dtype=Optional[pl.List(pl.Int64)],
+        ).alias("GT"),
+        pl.col("index").map_elements(
+            lambda idx: get_variant_data(source_vcf, idx, "DP", sample),
+            return_dtype=pl.Int16,
+        ).alias("DP"),
+    )
 
-    # the output from `bcftools head` doesn't necessarily reflect the number of lines
-    # that need to be skipped to reach the data portion of the VCF since it sometimes
-    # adds a `##FILTER=<ID=PASS>` line that isn't present in the actual VCF
-    vcf_data = pl.read_csv(vcf_path, skip_rows=len(metadata) + 1, separator="\t", ignore_errors=True)
+    # find the genotype info (REF allele, ALT alleles, and GT) for the record in the
+    # variant group with the highest read depth
+    ref_update, alt_update, gt_update = find_max_dp_gt(variant_group)
 
-    if not "#CHROM" in vcf_data.columns:
-        vcf_data = pl.concat(
-            [
-                pl.DataFrame([vcf_data.columns], schema=header, orient="row"),
-                vcf_data.rename({key: value for key, value in zip(vcf_data.columns, header)})
-            ],
-            how="vertical_relaxed",
+    variant_group = (
+        variant_group
+
+        # assign the REF, ALT, and GT values from the record with the highest read depth
+        # to all records in the variant group
+        .with_columns(
+            REF=pl.lit(ref_update),
+            ALT=pl.lit(alt_update),
+            GT=pl.lit(gt_update),
         )
 
-        vcf_data.with_columns(
-            QUAL=pl.when(
-                pl.col("QUAL").cast(pl.Float32(), strict=False).is_null()
-            ).then(
-                None
-            ).otherwise(
-                pl.col("QUAL")
-            )
+        # update all pysam VariantRecords with the new REF, ALT, and GT values
+        # and get back the FORMAT and $DATA strings for each VariantRecord as
+        # they would appear in the VCF file
+        .with_columns(
+            UPDATE=pl.struct(["index", "REF", "ALT", "GT"]).map_elements(
+                lambda row: update_variant_gt(
+                    source_vcf, row["index"], row["REF"], row["ALT"], row["GT"], sample,
+                ),
+                return_dtype=pl.List(pl.String),
+            ),
         )
 
-        # strict set to False makes it so that values that can't be cast to the specified data type
-        # are quietly set to null values
-        vcf_data = vcf_data.cast(
-            {
-                "POS": pl.Int32(),
-                "QUAL": pl.Float32(),
-            },
-            strict=False,
+        # update the FORMAT and $DATA columns in the variant group with the new values
+        .with_columns(
+            pl.col("UPDATE").list.get(0).alias("FORMAT"),
+            pl.col("UPDATE").list.get(1).alias(sample),
         )
 
-    return vcf_data
-
-
-def make_concat_compatible(
-    temp_dir_path: Path, vcf_1: VCFFile, vcf_2: VCFFile
-) -> tuple[VCFFile, VCFFile]:
-    """
-    Make two VCFs compatible for combining using bcftools concat. BCFTools requires that
-    VCFs have the same headers before they can be combined using bcftools concat.
-
-    :param temp_dir_path: the path to the (temporary) directory to store working files in
-    :param vcf_1: the first VCF to make compatible for concatenation
-    :param vcf_2: the second VCF file to make compatible for concatenation
-    :return: VCFs that are compatible for combining using `bcftools concat`
-    """
-    vcf_1_compatible = temp_dir_path / "vcf_1_compatible.vcf.gz"
-    vcf_2_compatible = temp_dir_path / "vcf_2_compatible.vcf.gz"
-
-    shared_samples = set(vcf_1.samples).intersection(set(vcf_2.samples))
-
-    vcf_1_compatible = vcf_subset(vcf_1, list(shared_samples), vcf_1_compatible)
-    vcf_2_compatible = vcf_subset(vcf_2, list(shared_samples), vcf_2_compatible)
-
-    return vcf_1_compatible, vcf_2_compatible
-
-
-def deduplicate_short_long_vcf(
-    concat_vcf: Union[Path, str],
-    short_read_vcf: Union[Path, str],
-    long_read_vcf: Union[Path, str],
-):
-    metadata_raw_concat, header_concat = read_vcf_metadata(concat_vcf)
-    metadata_short_read, header_short_read = read_vcf_metadata(short_read_vcf)
-    metadata_long_read, header_long_read = read_vcf_metadata(long_read_vcf)
-
-    concat_metadata = parse_vcf_metadata(metadata_raw_concat)
-    short_read_metadata = parse_vcf_metadata(metadata_short_read)
-    long_read_metadata = parse_vcf_metadata(metadata_long_read)
-
-    concat_data = read_vcf_data(concat_vcf, metadata_raw_concat, header_concat)
-    short_read = read_vcf_data(short_read_vcf, metadata_short_read, header_short_read)
-    long_read = read_vcf_data(long_read_vcf, metadata_long_read, header_long_read)
-
-    # separate duplicated and non-duplicated data
-    nonduplicated_data = concat_data.filter(
-        ~concat_data.select(pl.col("#CHROM", "POS")).is_duplicated()
-    )
-
-    duplicated_data = concat_data.filter(
-        concat_data.select(pl.col("#CHROM", "POS")).is_duplicated()
-    ).select(
-        pl.col("#CHROM", "POS")
-    ).unique()
-
-    # expand the data fields for VCFs for duplicated data
-    short_read_expanded = explode_format(
-        short_read.join(
-            duplicated_data.select(pl.col("#CHROM", "POS")),
-            on=["#CHROM", "POS"],
-            how="inner",
-        ),
-        short_read_metadata
-    )
-    long_read_expanded = explode_format(
-        long_read.join(
-            duplicated_data.select(pl.col("#CHROM", "POS")),
-            on=["#CHROM", "POS"],
-            how="inner",
-        ),
-        long_read_metadata
-    )
-
-    # within each chromosome-position group, de-duplicate the data using the guidelines:
-    # 1. prefer phasing data from the row that has phase information (presumably long read)
-    # 2. otherwise prefer data from the row that lacks haplotype information (presumably short read)
-    duplicated_data = duplicated_data.join(
-        short_read_expanded.select(
-            pl.col("#CHROM", "POS"),
-            cs.matches(r"^GT|PS"),
-        ),
-        on=["#CHROM", "POS"],
-        how="inner",
-    ).join(
-        long_read_expanded.select(
-            pl.col(colname for colname in VCF_BASE_HEADER if colname != "FORMAT"),
-            pl.col(
-                colname for colname in long_read_expanded.columns if
-                colname not in VCF_BASE_HEADER and not re.match(r"^GT|PS", colname)
-            )
-        ),
-        on=["#CHROM", "POS"],
-        how="inner",
-    )
-
-    # recombine the exploded data fields
-    duplicated_data = implode_format(
-        duplicated_data,
-        (set(nonduplicated_data.columns) - set(VCF_BASE_HEADER)).pop()
-    )
-
-    # need to sort for the de-duplicated data can be indexed
-    # sort order should be the order of the contig fields in the header
-    contigs = [
-        field.ID for field in concat_metadata if field.MetadataType == "ContigField"
-    ]
-
-    return metadata_raw_concat, pl.concat(
-        [nonduplicated_data, duplicated_data],
-    ).sort(
-        by=[pl.col("#CHROM").cast(pl.Enum(contigs)), pl.col("POS")],
-    )
-
-
-def vcf_concat(
-    vcf_1_path: Union[str, Path],
-    vcf_2_path: Union[str, Path],
-    temp_dir: Optional[Union[str, Path]] = None,
-    output: Optional[Union[str, Path]] = None,
-    *args,
-) -> VCFFile:
-    """
-    Combine two VCF files using bcftools concat
-
-    :params vcf_1_path: path to the first VCF file to concat
-    :params vcf_2_path: path to the second VCF file to concat
-    :params args: additional arguments to pass to bcftools concat
-    :return: the concatenated VCF object
-    """
-    temp_dir_path = _setup_workspace(temp_dir)
-
-    vcf_1 = VCFFile(vcf_1_path)
-    vcf_2 = VCFFile(vcf_2_path)
-    if output is None:
-        if temp_dir is None:
-            output = Path("concat.vcf.gz")
-        else:
-            output = Path(temp_dir_path / "concat.vcf.gz")
-        args += tuple(["-O", "b"])
-
-    vcf_1_compatible, vcf_2_compatible = make_concat_compatible(
-        temp_dir_path, vcf_1, vcf_2
-    )
-
-    try:
-        # concatenation requires that the two VCFs be compressed
-        subprocess.run(
-            [
-                "bcftools",
-                "concat",
-                "-a",
-                vcf_1_compatible.path,
-                vcf_2_compatible.path,
-                "-o",
-                output,
-                *args,
-            ],
-            check=True,
-            capture_output=True,
+        # only keep the record with the highest read depth since this is the one
+        # most likely to have the most accurate variant info
+        .filter(
+            pl.col("DP") == pl.col("DP").max(),
         )
-    except subprocess.CalledProcessError as err:
-        print(err.stderr.decode())
 
-    return VCFFile(output)
-
-
-def vcf_merge(
-    vcf_1_path: Union[str, Path],
-    vcf_2_path: Union[str, Path],
-    sample_rename: Optional[list[dict[str, str]]] = None,
-    temp_dir: Optional[Union[str, Path]] = None,
-    output: Optional[Union[str, Path]] = None,
-) -> VCFFile:
-    """
-    Merge two VCF files using bcftools merge
-
-    :params vcf_1_path: path to the first VCF file to merge
-    :params vcf_2_path: path to the second VCF file to merge
-    :params sample_rename: a list of dictionaries mapping the sample names in the VCFs to the desired sample names. the
-        order of the dictionaries in the list should match the order of the VCFs
-    :params temp_dir: the directory to store temporary files in
-    :params output: the path to the output merged VCF file
-    :params args: additional arguments to pass to bcftools
-    :return: the merged VCF object
-    """
-    temp_dir_path = _setup_workspace(temp_dir)
-
-    vcf_1 = VCFFile(vcf_1_path)
-    vcf_2 = VCFFile(vcf_2_path)
-    if output is None:
-        if temp_dir is None:
-            output = Path("merge.vcf.gz")
-        else:
-            output = Path(temp_dir_path / "merge.vcf.gz")
-
-    # TODO: might not need to compress just to merge; this is a significant portion of runtime
-    # compress if not already compressed
-    for vcf_file in [vcf_1, vcf_2]:
-        if not vcf_file.compressed:
-            vcf_file.compress(
-                output=Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz")
-            )
-
-    # TODO: consider making placeholder files with samples renamed for the merge
-    if sample_rename is not None:
-
-        # rename samples using bcftools merge so that all samples between files being
-        # merged are unique this is required if the `--force-samples` flag is not used
-        for file_idx, vcf in enumerate([vcf_1, vcf_2]):
-            vcf.reheader(sample_rename[file_idx])
-
-    subprocess.run(
-        ["bcftools", "merge", vcf_1.path, vcf_2.path, "-o", output, "-O", "b"],
-        check=True,
-    )
-
-    return VCFFile(output)
-
-
-def ragged_concat(
-    short_read_vcf_path: Union[str, Path],
-    long_read_vcf_path: Union[str, Path],
-    sample_rename: Optional[list[dict[str, str]]] = None,
-    temp_dir: Optional[Union[str, Path]] = None,
-    output: Optional[Union[str, Path]] = None,
-) -> VCFFile:
-    temp_dir_path = _setup_workspace(temp_dir)
-
-    short_read_vcf = VCFFile(short_read_vcf_path)
-    long_read_vcf = VCFFile(long_read_vcf_path)
-    if output is None:
-        if temp_dir is None:
-            output = Path("ragged_concat.vcf.gz")
-        else:
-            output = Path(temp_dir_path / "ragged_concat.vcf.gz")
-
-    # compress if not already compressed
-    for vcf_file in [short_read_vcf, long_read_vcf]:
-        if not vcf_file.compressed:
-            vcf_file.compress(
-                output=Path(temp_dir_path / vcf_file.path.name).with_suffix(".vcf.gz")
-            )
-
-    if sample_rename is not None:
-
-        # rename samples using bcftools merge so that all samples between files being
-        # merged are unique this is required if the `--force-samples` flag is not used
-        for file_idx, vcf_file in enumerate([short_read_vcf, long_read_vcf]):
-            vcf_file.reheader(
-                rename_dict=sample_rename[file_idx]
-            )
-
-    # get the samples that are in common between the two vcf files to subset
-    # for concatenation
-    to_concat = sorted(
-        list(
-            set(short_read_vcf.samples).intersection(set(long_read_vcf.samples))
+        # remove the columns that were used to deduplicate the genotype
+        .drop(
+            ["GT", "DP", "UPDATE"]
         )
     )
 
-    # get the samples that are not shared between the two vcf files to subset
-    # for merging
-    to_merge = sorted(
-        list(
-            set(short_read_vcf.samples).symmetric_difference(set(long_read_vcf.samples))
-        )
-    )
+    return variant_group
 
-    # concat the common samples, merge anything remaining
-    short_read_common_subset = vcf_subset(short_read_vcf, to_concat, output=Path(temp_dir_path), force=True)
-    long_read_common_subset = vcf_subset(long_read_vcf, to_concat, output=Path(temp_dir_path), force=True)
-
-    short_read_ragged_subset = vcf_subset(short_read_vcf, to_merge, output=Path(temp_dir_path), force=True)
-    long_read_ragged_subset = vcf_subset(long_read_vcf, to_merge, output=Path(temp_dir_path), force=True)
-
-    concat_vcf_path = temp_dir_path / "concat.vcf.gz"
-    subprocess.run(
-        [
-            "bcftools",
-            "concat",
-            "-a",
-            short_read_common_subset.path,
-            long_read_common_subset.path,
-            "-o",
-            concat_vcf_path,
-            "-O",
-            "b",
-        ],
-        check=True,
-    )
-    concat_vcf = VCFFile(concat_vcf_path)
-
-    concat_metadata, deduplicated_vcf = deduplicate_short_long_vcf(
-        concat_vcf.path,
-        short_read_common_subset.path,
-        long_read_common_subset.path
-    )
-
-    with open(concat_vcf.path.with_suffix(""), "w") as outfile:
-        outfile.write("\n".join(concat_metadata))
-        outfile.write("\n")
-        deduplicated_vcf.write_csv(outfile, include_header=True, separator="\t")
-
-    concat_vcf = VCFFile(concat_vcf.path.with_suffix(""))
-    concat_vcf.compress(keep=False)
-
-    for vcf_file in [short_read_ragged_subset, long_read_ragged_subset]:
-        samples = vcf_file.samples
-
-        if samples:
-            if output.exists():
-                subprocess.run(
-                    [
-                        "bcftools",
-                        "merge",
-                        output,
-                        vcf_file.path,
-                        "-o",
-                        temp_dir_path / "ragged_concat.temp.vcf.gz",
-                        "-O",
-                        "b",
-                    ],
-                    check=True,
-                )
-                subprocess.run(
-                    ["mv", temp_dir_path / "ragged_concat.temp.vcf.gz", output],
-                )
-            else:
-                subprocess.run(
-                    [
-                        "bcftools",
-                        "merge",
-                        concat_vcf.path,
-                        vcf_file.path,
-                        "-o",
-                        output,
-                        "-O",
-                        "b",
-                    ],
-                    check=True,
-                )
-
-                # instantiating the VCF object here to compress and index the file
-                VCFFile(output)
-
-    return VCFFile(output)

@@ -169,3 +169,33 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
     index(output)
 
     return output
+
+
+def merge(vcf_fns: list[str | Path], output: str | Path) -> Path:
+    """Bcftools merge wrapper for merging two VCF files
+
+    :param vcf_fns: list of VCF files to merge
+    :param output: VCF file to output
+    :return: the Path to the merged VCF
+    """
+    vcf_fns = [Path(vcf_fn) for vcf_fn in vcf_fns]
+
+    if len(vcf_fns) != 2:
+        raise ValueError("Only two VCFs can be merged")
+
+    if set(read_vcf(vcf_fns[0]).samples).intersection(read_vcf(vcf_fns[1]).samples):
+        raise ValueError("The VCF merge operation expects the two VCFs to have no overlapping samples")
+
+    args = [
+        "bcftools", "merge", "-o", output, "--no-version", str(vcf_fns[0]), str(vcf_fns[1])
+    ]
+
+    merge_output = subprocess.run(args, check=True, capture_output=True)
+
+    if merge_output.returncode != 0:
+        raise ValueError(f"bcftools returned error code {merge_output.returncode}")
+
+    if Path(output).suffix == ".gz":
+        index(output)
+
+    return output
