@@ -196,4 +196,3 @@ def deduplicate_gt(source_vcf: VCF, variant_group: pl.DataFrame, sample: str) ->
     )
 
     return variant_group
-

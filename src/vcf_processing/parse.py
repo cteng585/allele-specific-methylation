@@ -21,9 +21,12 @@ def read_vcf(source: str | Path) -> VCF:
         case ".gz":
             with gzip.open(source) as infile:
                 check_lines = [next(infile).decode() for _ in range(2)]
-        case ".vcf":
+
+        # the null suffix and .reheadered suffix cases are if the passed path is a tempfile
+        case ".vcf" | "" | ".reheadered":
             with open(source) as infile:
                 check_lines = [next(infile) for _ in range(2)]
+
         case _:
             file_type_suffix = Path(source).suffix
             msg = f"File type {file_type_suffix} not supported"
