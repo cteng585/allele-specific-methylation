@@ -47,18 +47,20 @@ def reheader(vcf_fn: str | Path, rename_dict: dict[str, str]) -> Path:
         renaming_fp.write(f"{old_name}\t{new_name}\n".encode())
     renaming_fp.close()
 
-    subprocess.run(
-        [
-            "bcftools", "reheader", "-s", renaming_fp.name, "-o", output_fn, vcf_fn,
-        ], check=False,
-    )
+    try:
+        reheader_args = ["bcftools", "reheader", "-s", renaming_fp.name, "-o", output_fn, vcf_fn]
+        subprocess.run(reheader_args, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        msg = f"bcftools reheader error: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg) from e
 
     if Path(output_fn).suffix == ".gz":
-        subprocess.run(
-            [
-                "bcftools", "index", output_fn,
-            ], check=False,
-        )
+        try:
+            index_args = ["bcftools", "index", output_fn]
+            subprocess.run(index_args, check=True, capture_output=True)
+        except subprocess.CalledProcessError as e:
+            msg = f"bcftools index error: {e.stderr.decode('utf-8')}"
+            raise ValueError(msg) from e
 
     os.remove(renaming_fp.name)
 
@@ -109,11 +111,16 @@ def index(vcf_fn: str | Path) -> Path:
         msg = "Error: 'bcftools' is not installed or not in PATH."
         raise OSError(msg)
 
-    subprocess.run(["bcftools", "index", vcf_fn], check=True, capture_output=True)
+    try:
+        subprocess.run(["bcftools", "index", vcf_fn], check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        msg = f"bcftools index error: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg) from e
+
     return Path(f"{vcf_fn}.csi")
 
 
-def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
+def  concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
     """Bcftools concat wrapper for concatenating two VCF files
 
     :param vcf_fns: list of VCF files to concatenate
@@ -141,14 +148,24 @@ def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
             msg = f"File {vcf_fn} is not compressed"
             raise ValueError(msg)
 
-    subprocess.run(["bcftools", "concat", "-a", "-o", output, "--no-version", vcf_fns[0], vcf_fns[1]], check=False)
+    try:
+        concat_args = ["bcftools", "concat", "-a", "-o", output, "--no-version", vcf_fns[0], vcf_fns[1]]
+        subprocess.run(concat_args, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        if e.returncode == 255:
+            msg = f"bcftools concat error: {e.stderr.decode('utf-8')}"
+            raise ValueError(msg) from e
+        else:
+            msg = f"Unknown error: {e.stderr.decode('utf-8')}"
+            raise ValueError(msg) from e
+
     if Path(output).suffix == ".gz":
         index(output)
 
     return output
 
 
-def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
+def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path | None:
     """Bcftools wrapper for subsetting a VCF by sample name
 
     The subset name is the name of the original VCF with the sample names appended to it
@@ -157,7 +174,7 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
 
     :param vcf_fn: the filename of the VCF to subset
     :param samples: the samples to subset
-    :return:
+    :return: the Path to the subsetted VCF, or None if the sample does not exist in the VCF header
     """
     if shutil.which("bcftools") is None:
         msg = "Error: 'bcftools' is not installed or not in PATH."
@@ -172,11 +189,14 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path:
 
     args = ["bcftools", "view", "-s", samples, "-o", output, "--no-version", vcf_fn]
 
-    subset_output = subprocess.run(args, check=True, capture_output=True)
-
-    if subset_output.returncode != 0:
-        msg = f"bcftools returned error code {subset_output.returncode}"
-        raise ValueError(msg)
+    try:
+        subprocess.run(args, check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        if "subset called for sample that does not exist in header" in e.stderr.decode("utf-8"):
+            return None
+        else:
+            msg = f"bcftools returned error: {e.stderr.decode('utf-8')}"
+            raise ValueError(msg)
 
     index(output)
 
@@ -205,14 +225,11 @@ def merge(vcf_fns: list[str | Path], output: str | Path) -> Path:
         msg = "The VCF merge operation expects the two VCFs to have no overlapping samples"
         raise ValueError(msg)
 
-    args = [
-        "bcftools", "merge", "-o", output, "--no-version", str(vcf_fns[0]), str(vcf_fns[1]),
-    ]
-
-    merge_output = subprocess.run(args, check=True, capture_output=True)
-
-    if merge_output.returncode != 0:
-        msg = f"bcftools returned error code {merge_output.returncode}"
+    try:
+        merge_args = ["bcftools", "merge", "-o", output, "--no-version", str(vcf_fns[0]), str(vcf_fns[1])]
+        subprocess.run(merge_args, check=False, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        msg = f"bcftools merge error: {e.stderr.decode('utf-8')}"
         raise ValueError(msg)
 
     if Path(output).suffix == ".gz":

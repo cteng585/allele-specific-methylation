@@ -239,13 +239,15 @@ class VCF:
             # not be included
             case ".gz":
                 with bgzf.BgzfWriter(path, "wb") as outfile:
-                    outfile.write(str(header))
+                    outfile.write("\n".join(header))
+                    outfile.write("\n")
                     for row in write_data.rows():
                         outfile.write("\t".join(str(value) for value in row).encode())
 
             case ".vcf":
                 with open(path, "w") as outfile:
-                    outfile.write(str(header))
+                    outfile.write("\n".join(header))
+                    outfile.write("\n")
                     write_data.write_csv(
                         outfile,
                         include_header=True,
