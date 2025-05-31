@@ -3,6 +3,7 @@ from pathlib import Path
 
 import polars as pl
 import pysam
+
 from src.vcf_processing.classes import VCF
 
 

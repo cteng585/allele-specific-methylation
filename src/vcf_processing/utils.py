@@ -155,9 +155,8 @@ def  concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
         if e.returncode == 255:
             msg = f"bcftools concat error: {e.stderr.decode('utf-8')}"
             raise ValueError(msg) from e
-        else:
-            msg = f"Unknown error: {e.stderr.decode('utf-8')}"
-            raise ValueError(msg) from e
+        msg = f"Unknown error: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg) from e
 
     if Path(output).suffix == ".gz":
         index(output)
@@ -194,9 +193,8 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path | None:
     except subprocess.CalledProcessError as e:
         if "subset called for sample that does not exist in header" in e.stderr.decode("utf-8"):
             return None
-        else:
-            msg = f"bcftools returned error: {e.stderr.decode('utf-8')}"
-            raise ValueError(msg)
+        msg = f"bcftools returned error: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg)
 
     index(output)
 

@@ -2,6 +2,7 @@
 from typing import Any, Optional
 
 import polars as pl
+
 from src.vcf_processing.classes import VCF
 
 
