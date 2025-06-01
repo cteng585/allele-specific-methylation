@@ -7,7 +7,7 @@ import polars as pl
 from src.vcf_processing.classes import VCF
 from src.vcf_processing.parse import read_vcf
 from src.vcf_processing.preprocessing import deduplicate_gt
-from src.vcf_processing.utils import concat, compress, index, merge, os_file, reheader, subset
+from src.vcf_processing.utils import compress, concat, index, merge, os_file, reheader, subset
 
 
 def combine_illumina_ont(
@@ -65,7 +65,7 @@ def combine_illumina_ont(
     for key, vcf, rename_dict in zip(
         reheadered_vcfs.keys(),
         [snv_minus_indel_vcf, indel_vcf, long_read_minus_indel_vcf],
-        [snv_fn_rename, indel_fn_rename, long_read_fn_rename],
+        [snv_fn_rename, indel_fn_rename, long_read_fn_rename], strict=False,
     ):
         if rename_dict is not None:
             reheadered_vcf = read_vcf(reheader(vcf.path, rename_dict))
@@ -100,17 +100,17 @@ def combine_illumina_ont(
     snv_indel_vcf = read_vcf(
         concat(
             [snv_minus_indel_vcf.path, indel_vcf.path],
-            snv_indel_fn.name
-        )
+            snv_indel_fn.name,
+        ),
     )
 
     # subset to the samples of interest combined across all VCFs
     # subset returns None if the sample is not found in the VCF
     subset_vcfs = {
-        "short_read_normal": subset(snv_indel_vcf.path, samples=normal_name,),
-        "short_read_sample": subset(snv_indel_vcf.path, samples=tumor_name,),
-        "long_read_normal": subset(long_read_minus_indel_vcf.path, samples=normal_name,),
-        "long_read_sample": subset(long_read_minus_indel_vcf.path, samples=tumor_name,),
+        "short_read_normal": subset(snv_indel_vcf.path, samples=normal_name),
+        "short_read_sample": subset(snv_indel_vcf.path, samples=tumor_name),
+        "long_read_normal": subset(long_read_minus_indel_vcf.path, samples=normal_name),
+        "long_read_sample": subset(long_read_minus_indel_vcf.path, samples=tumor_name),
     }
     for key, vcf_fn in subset_vcfs.items():
         if vcf_fn is not None:
@@ -120,7 +120,7 @@ def combine_illumina_ont(
     for vcf_type, subset_short_read, subset_long_read in zip(
         ["normal", "tumor"],
         [subset_vcfs["short_read_normal"], subset_vcfs["short_read_sample"]],
-        [subset_vcfs["long_read_normal"], subset_vcfs["long_read_sample"]],
+        [subset_vcfs["long_read_normal"], subset_vcfs["long_read_sample"]], strict=False,
     ):
         if subset_short_read is not None and subset_long_read is not None:
             concat_vcf = tempfile.NamedTemporaryFile(delete=False)
@@ -129,7 +129,7 @@ def combine_illumina_ont(
                 concat(
                     [subset_short_read.path, subset_long_read.path],
                     concat_vcf.name,
-                )
+                ),
             )
 
         elif subset_short_read is not None and subset_long_read is None:
@@ -155,7 +155,7 @@ def combine_illumina_ont(
         # find the variants that are duplicated in the data set by finding combinations of CHROM/POS
         # that are duplicated
         duplicated_variants = concat_vcf.data.filter(
-            pl.struct(["CHROM", "POS"]).is_duplicated()
+            pl.struct(["CHROM", "POS"]).is_duplicated(),
         )
 
         if duplicated_variants.shape[0] == 0:
@@ -169,13 +169,13 @@ def combine_illumina_ont(
             match vcf_type:
                 case "normal":
                     deduplicated_variants = duplicated_variants.group_by(
-                        "CHROM", "POS"
+                        "CHROM", "POS",
                     ).map_groups(
                         lambda variant_group: deduplicate_gt(concat_vcf, variant_group, normal_name),
                     )
                 case "tumor":
                     deduplicated_variants = duplicated_variants.group_by(
-                        "CHROM", "POS"
+                        "CHROM", "POS",
                     ).map_groups(
                         lambda variant_group: deduplicate_gt(concat_vcf, variant_group, tumor_name),
                     )
@@ -185,10 +185,10 @@ def combine_illumina_ont(
             deduplicated_data = pl.concat(
                 [
                     concat_vcf.data.filter(
-                        ~pl.struct(["CHROM", "POS"]).is_duplicated()
+                        ~pl.struct(["CHROM", "POS"]).is_duplicated(),
                     ),
-                    deduplicated_variants
-                ]
+                    deduplicated_variants,
+                ],
             )
 
             # this is now a deduplicated VCF of only the sample[0] variants across short read indels,
@@ -198,8 +198,8 @@ def combine_illumina_ont(
                     by=[
                         pl.col("CHROM").cast(pl.Enum(list(concat_vcf.header.contigs))),
                         pl.col("POS"),
-                    ]
-                ), header=concat_vcf.header
+                    ],
+                ), header=concat_vcf.header,
             )
 
             # all inputs for merge need to be compressed
@@ -219,8 +219,8 @@ def combine_illumina_ont(
         merged_vcf = read_vcf(
             merge(
                 [subset_vcfs["deduplicated_normal_concat"].path, subset_vcfs["deduplicated_tumor_concat"].path],
-                output="merged.vcf"
-            )
+                output="merged.vcf",
+            ),
         )
     elif (
         subset_vcfs["deduplicated_normal_concat"] is not None and
@@ -240,4 +240,3 @@ def combine_illumina_ont(
 
     merged_vcf.write(output_fn)
 
-    return

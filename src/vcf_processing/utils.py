@@ -247,7 +247,7 @@ def os_file(fn: str | Path) -> str:
     stdout = os_file_output.stdout.decode("utf-8").strip()
     file_type_patterns = re.compile(
         r"(?P<BGZF>Blocked GNU Zip Format \(BGZF; gzip compatible\))|"
-        r"(?P<VCF>Variant Call Format \(VCF\))"
+        r"(?P<VCF>Variant Call Format \(VCF\))",
     )
 
     matched_file_types = [
@@ -257,7 +257,7 @@ def os_file(fn: str | Path) -> str:
     if len(matched_file_types) == 0:
         msg = f"File {fn} is not an expected file type for this workflow"
         raise ValueError(msg)
-    elif len(matched_file_types) > 1:
+    if len(matched_file_types) > 1:
         msg = f"File {fn} matches multiple file types: {', '.join(matched_file_types)}"
         raise ValueError(msg)
 

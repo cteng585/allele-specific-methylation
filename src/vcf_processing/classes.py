@@ -233,7 +233,7 @@ class VCF:
         write_data = self.data.select(
             pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *samples),
         ).sort(
-            by=[pl.col("CHROM").cast(pl.Enum(list(self.__bcf.header.contigs))), pl.col("POS")]
+            by=[pl.col("CHROM").cast(pl.Enum(list(self.__bcf.header.contigs))), pl.col("POS")],
         ).rename({"CHROM": "#CHROM"})
 
         match path.suffix:
