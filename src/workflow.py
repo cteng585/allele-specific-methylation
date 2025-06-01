@@ -193,7 +193,14 @@ def combine_illumina_ont(
 
             # this is now a deduplicated VCF of only the sample[0] variants across short read indels,
             # short read SNVs, and long read SNV/indels
-            deduplicated_vcf = VCF(deduplicated_data.sort(by=["CHROM", "POS"]), header=concat_vcf.header)
+            deduplicated_vcf = VCF(
+                deduplicated_data.sort(
+                    by=[
+                        pl.col("CHROM").cast(pl.Enum(list(concat_vcf.header.contigs))),
+                        pl.col("POS"),
+                    ]
+                ), header=concat_vcf.header
+            )
 
             # all inputs for merge need to be compressed
             deduplicated_vcf.path = compress(deduplicated_vcf.path)
