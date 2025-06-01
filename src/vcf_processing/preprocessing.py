@@ -83,7 +83,8 @@ def update_variant_gt(
 def find_max_dp_gt(variant_group: pl.DataFrame | pl.LazyFrame) -> tuple[str, str, list[int, int]]:
     """Find the genotype that corresponds to the variant record with the highest read depth
 
-    this is per variant group
+    this is per variant group. if there is more than one record corresponding to the maximum
+    read depth, choose the record with the highest genotype quality
 
     :param variant_group: the variant group to find the max read depth (DP) genotype for
     :return: the reference allele, alt allele(s), and genotype for the variant record with
@@ -93,12 +94,14 @@ def find_max_dp_gt(variant_group: pl.DataFrame | pl.LazyFrame) -> tuple[str, str
         variant_group
         .filter((pl.col("GT") != []) & (pl.col("GT") != [None]))
         .filter(pl.col("DP") == pl.col("DP").max())
+        .filter(pl.col("QUAL") == pl.col("QUAL").max())
         .select("REF", "ALT", "GT").to_dicts()
     )
 
     if len(max_dp_gt) > 1:
-        msg = "Multiple genotypes with the same maximum DP found."
+        msg = "Multiple genotypes with the same maximum DP and QUAL found."
         raise ValueError(msg)
+
     ref_update = max_dp_gt[0]["REF"]
     alt_update = max_dp_gt[0]["ALT"]
     genotype_update = max_dp_gt[0]["GT"]

@@ -1,4 +1,5 @@
 import os
+import re
 import shutil
 import subprocess
 import tempfile
@@ -120,7 +121,7 @@ def index(vcf_fn: str | Path) -> Path:
     return Path(f"{vcf_fn}.csi")
 
 
-def  concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
+def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
     """Bcftools concat wrapper for concatenating two VCF files
 
     :param vcf_fns: list of VCF files to concatenate
@@ -234,3 +235,31 @@ def merge(vcf_fns: list[str | Path], output: str | Path) -> Path:
         index(output)
 
     return output
+
+
+def os_file(fn: str | Path) -> str:
+    try:
+        os_file_output = subprocess.run(["file", fn], check=True, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        msg = f"Error running 'file' command on {fn}: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg) from e
+
+    stdout = os_file_output.stdout.decode("utf-8").strip()
+    file_type_patterns = re.compile(
+        r"(?P<BGZF>Blocked GNU Zip Format \(BGZF; gzip compatible\))|"
+        r"(?P<VCF>Variant Call Format \(VCF\))"
+    )
+
+    matched_file_types = [
+        group.lastgroup for group in file_type_patterns.finditer(stdout)
+    ]
+
+    if len(matched_file_types) == 0:
+        msg = f"File {fn} is not an expected file type for this workflow"
+        raise ValueError(msg)
+    elif len(matched_file_types) > 1:
+        msg = f"File {fn} matches multiple file types: {', '.join(matched_file_types)}"
+        raise ValueError(msg)
+
+    # Return the first matched file type, which should be the only one
+    return matched_file_types[0]

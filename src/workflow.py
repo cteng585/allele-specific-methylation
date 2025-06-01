@@ -1,14 +1,13 @@
 import tempfile
 import warnings
 from pathlib import Path
-from textwrap import dedent
 
 import polars as pl
 
 from src.vcf_processing.classes import VCF
 from src.vcf_processing.parse import read_vcf
 from src.vcf_processing.preprocessing import deduplicate_gt
-from src.vcf_processing.utils import concat, compress, index, merge, reheader, subset
+from src.vcf_processing.utils import concat, compress, index, merge, os_file, reheader, subset
 
 
 def combine_illumina_ont(
@@ -63,7 +62,6 @@ def combine_illumina_ont(
         "short_read_indel": None,
         "long_read": None,
     }
-
     for key, vcf, rename_dict in zip(
         reheadered_vcfs.keys(),
         [snv_minus_indel_vcf, indel_vcf, long_read_minus_indel_vcf],
@@ -71,19 +69,30 @@ def combine_illumina_ont(
     ):
         if rename_dict is not None:
             reheadered_vcf = read_vcf(reheader(vcf.path, rename_dict))
-            reheadered_vcf.path = compress(reheadered_vcf.path, overwrite=True)
-            index(reheadered_vcf.path)
+            if os_file(reheadered_vcf.path) == "VCF":
+                reheadered_vcf.path = compress(reheadered_vcf.path, overwrite=True)
+                index(reheadered_vcf.path)
             reheadered_vcfs[key] = reheadered_vcf
+
         else:
             reheadered_vcfs[key] = vcf
 
         match key:
             case "short_read_snv":
-                snv_minus_indel_vcf = reheadered_vcfs[key]
+                snv_minus_indel_vcf = (
+                    reheadered_vcfs[key] if reheadered_vcfs[key] is not None
+                    else snv_minus_indel_vcf
+                )
             case "short_read_indel":
-                indel_vcf = reheadered_vcfs[key]
+                indel_vcf = (
+                    reheadered_vcfs[key] if reheadered_vcfs[key] is not None
+                    else indel_vcf
+                )
             case "long_read":
-                long_read_minus_indel_vcf = reheadered_vcfs[key]
+                long_read_minus_indel_vcf = (
+                    reheadered_vcfs[key] if not None
+                    else long_read_minus_indel_vcf
+                )
 
     # concatenating the SNV and indel VCFs
     snv_indel_fn = tempfile.NamedTemporaryFile(delete=False)
