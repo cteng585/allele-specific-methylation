@@ -200,3 +200,26 @@ def deduplicate_gt(source_vcf: VCF, variant_group: pl.DataFrame, sample: str) ->
     )
 
     return variant_group
+
+
+# ----------------------- #
+# Longphase Preprocessing #
+# ----------------------- #
+
+def filter_no_genotype(vcf: VCF):
+    """Filter out variants that do not have genotype information
+
+    Use the FORMAT metadata field in the VCF to determine presence of genotype information
+
+    :param vcf: the VCF object to filter
+    :return:
+    """
+    filtered_data = vcf.data.filter(
+        pl.col("FORMAT").str.split(":").list.contains("GT")
+    )
+    filtered_vcf = VCF(filtered_data, header=vcf.header)
+
+    output_fn = str(vcf.path).removesuffix("".join(vcf.path.suffixes)) + ".has_GT.vcf"
+    filtered_vcf.write(output_fn)
+
+    return filtered_vcf
