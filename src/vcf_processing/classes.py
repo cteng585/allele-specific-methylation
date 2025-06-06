@@ -25,7 +25,7 @@ class VCF:
         self.__managed_files: list[tuple[Path, bool]] = []
         self.__path: Path | None = Path(path) if path else None
         self.samples: list[str] | None = None
-        self.data: pl.DataFrame | None = data
+        self.__data: pl.DataFrame | None = data
         self.__post_init()
 
     def __del__(self):
@@ -85,6 +85,21 @@ class VCF:
                 )
 
             self.__bcf = pysam.VariantFile(self.path)
+
+    @property
+    def data(self):
+        return self.__data
+
+    @data.setter
+    def data(self, new_data: pl.DataFrame):
+        if not isinstance(new_data, pl.DataFrame):
+            raise TypeError(f"Expected pl.DataFrame, got {type(new_data)}")
+
+        # wipe old filters since they're based on the old data
+        for field in self.filters:
+            del self.__filters[field]
+
+        self.__data = new_data
 
     @property
     def header(self):
