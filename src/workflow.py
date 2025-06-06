@@ -1,8 +1,13 @@
+import re
 import tempfile
 import warnings
 from pathlib import Path
 
 import polars as pl
+import pysam
+
+from src.methylation.classes import PhasedVariants
+from src.methylation.utils import hamming
 
 from src.vcf_processing.classes import VCF
 from src.vcf_processing.parse import read_vcf
@@ -240,3 +245,166 @@ def combine_illumina_ont(
 
     merged_vcf.write(output_fn)
 
+
+def map_phasing(
+    original_phased_fn: str | Path,
+    new_phased_fn: str | Path,
+    sample_name: str,
+) -> VCF:
+    """Map the phasing of variants in `new_phased_fn` to the phasing of variants in `original_phased_fn`
+
+    Since the assignment of haplotypes isn't guaranteed to be consistent between phase blocks, try to
+    map the haplotypes from one phasing run to the haplotypes from another phasing run by minimizing
+    the Hamming distance between genotypes of matched phase blocks
+
+    :param original_phased_fn: the original phased VCF file to map the phasing to
+    :param new_phased_fn: the new phased VCF file to map the phasing from
+    :param sample_name: the sample name to map the phasing for
+    :return:
+    """
+    # this should also resolve the variant records themselves, not just the dataframe
+    def update_variant_genotypes(variant_index: int, genotype: str, sample_name: str,
+                                 variant_records: list[pysam.VariantRecord]):
+        variant_records[variant_index].samples[sample_name]["GT"] = tuple(
+            int(allele) for allele in re.split(r"[/|]", genotype))
+        variant_records[variant_index].samples[sample_name].phased = True
+
+        format_string = ":".join(variant_records[variant_index].format.keys())
+        data_string = variant_records[variant_index].__str__().strip().split("\t")[-1]
+        return [format_string, data_string]
+
+    original_vcf = read_vcf(original_phased_fn)
+    original_phased = PhasedVariants(original_vcf)
+
+    new_vcf = read_vcf(new_phased_fn)
+    new_phased = PhasedVariants(new_vcf)
+
+    # first get the coordinates that are shared between the newly phased data and
+    # the original long-read data set, then get the phase blocks that each coordinate
+    # belongs to. grouping by the phase block in the new data set and matching to the
+    # most common phase block in the original data set (.mode().first()) will pair
+    # phase blocks to calculate distances between
+    shared_variants = new_phased[sample_name].join(
+        original_phased[sample_name],
+        on=["CHROM", "POS"],
+        how="inner",
+        suffix="_original"
+    )
+
+    # use the phase block that has the largest variant number intersect between the
+    # original phased data and the newly phased data to calculate the hamming distance
+    # between the two data sets
+    # depending on the hamming distance between the matched phase blocks, decide whether
+    # ALL the variants in the newly phased block need to be switched
+    mapped_phase_blocks = shared_variants.group_by("PS").agg(
+        pl.col("PS_original").mode().first()
+    )
+
+    mapped_phase_block_variants = shared_variants.filter(
+        (pl.col("PS").is_in(mapped_phase_blocks.select("PS"))) &
+        (pl.col("PS_original").is_in(mapped_phase_blocks.select("PS_original"))),
+    )
+
+    # calculate the hamming distances between phase blocks
+    # if HAMMING_1_1 > HAMMING_1_2, then the haplotypes in the new data set need to be
+    # flipped (since the hamming distance between HP1 in the newly phased data is closer
+    # to HP2 in the originally phased data)
+    # otherwise the haplotypes in the new data set are already in the correct orientation
+    hamming_distances = (
+        mapped_phase_block_variants
+        .group_by("PS")  # for each phase block
+        # create 4 arrays of haplotypes at each position in the phase block corresponding to each possible haplotype in the original data set and each possible haplotype in the new data set
+        .agg(
+            pl.col("HP1", "HP2", "HP1_original", "HP2_original")
+        )
+        .with_columns(
+            # find the hamming distance between HP1 in the new data set and HP1 in the original data set
+            HAMMING_1_1=pl.struct(["HP1", "HP1_original"]).map_elements(
+                lambda s: hamming(s["HP1"], s["HP1_original"]),
+                return_dtype=pl.Int32,
+            ),
+            # find the hamming distance between HP2 in the new data set and HP2 in the original data set
+            HAMMING_1_2=pl.struct(["HP1", "HP2_original"]).map_elements(
+                lambda s: hamming(s["HP1"], s["HP2_original"]),
+                return_dtype=pl.Int32,
+            )
+        )
+    )
+
+    # find the phasing genotypes that minimize the hamming distance between the original phased data and
+    # the newly phased data
+    min_hamming_genotypes = (
+        new_phased[sample_name]
+        # joining the full newly phased data set on the PS column allows capture of variants that are in the same
+        # phase block in the new data set which might not be in the same phase block in the original data set.
+        # this is important since all variants in a phase block will need to be flipped together when the hamming
+        # distance is minimized
+        .join(
+            hamming_distances.select("PS", "HAMMING_1_1", "HAMMING_1_2"),
+            on=["PS"],
+            how="left"
+        )
+        # create new columns for the haplotypes that minimize the hamming distance between the haplotypes of the
+        # original data set and the newly phased data set
+        .with_columns(
+            HP1_updated=pl.when(
+                (pl.col("HAMMING_1_1") <= pl.col("HAMMING_1_2")) | (pl.col("HAMMING_1_1").is_null())
+            ).then(pl.col("HP1")).otherwise(pl.col("HP2")),
+            HP2_updated=pl.when(
+                (pl.col("HAMMING_1_1") < pl.col("HAMMING_1_2")) | (pl.col("HAMMING_1_2").is_null())
+            ).then(pl.col("HP2")).otherwise(pl.col("HP1"))
+        )
+        .with_columns(
+            GT_UPDATE=pl.concat_str([pl.col("HP1_updated", "HP2_updated")], separator="|")
+        )
+        .select(pl.col("CHROM", "POS", "GT", "PS", "GT_UPDATE"))
+        # filter down to positions where the genotype in the newly phased data doesn't match
+        # the genotype in the original data to minimize the number of variants/records that
+        # need to be updated
+        .filter(pl.col("GT") != pl.col("GT_UPDATE"))
+    )
+
+    # update the variant records in the new phased data set with the genotypes that minimize the
+    # hamming distance
+    min_hamming_genotypes = (
+        # add the index of the variant record from the newly phased data to the dataframe of variants
+        # that need to be updated so that the VCF data can be updated
+        min_hamming_genotypes
+        .join(
+            new_vcf.data.select(pl.exclude("FORMAT", sample_name)),
+            on=["CHROM", "POS"],
+            how="inner",
+        )
+        # this is the step that simultaneously updates the underlying variant records with the
+        # genotype information and also provides updated FORMAT/DATA strings to the dataframe.
+        # updating the FORMAT/DATA strings is necessary since writing from a VCF object uses
+        # the VCF object's associated dataframe
+        .with_columns(
+            pl.struct(["index", "POS", "GT_UPDATE"]).map_elements(
+                lambda row: update_variant_genotypes(
+                    row["index"], row["GT_UPDATE"], sample_name, new_vcf.records
+                ),
+                return_dtype=pl.List(pl.String),
+            ).alias("FORMAT,DATA")
+        )
+        .with_columns(
+            pl.col("FORMAT,DATA").list.get(1).alias(sample_name),
+            FORMAT=pl.col("FORMAT,DATA").list.get(0),
+        )
+    )
+
+    no_phasing_update = new_vcf.data.join(
+        min_hamming_genotypes.select("CHROM", "POS"),
+        on=["CHROM", "POS"],
+        how="anti",
+    )
+
+    min_hamming_genotypes = min_hamming_genotypes.select(no_phasing_update.columns)
+
+    updated_data = pl.concat(
+        [no_phasing_update, min_hamming_genotypes],
+    ).sort(
+        by=[pl.col("CHROM").cast(pl.Enum(list(new_vcf.header.contigs))), pl.col("POS")],
+    )
+
+    return VCF(updated_data, header=new_vcf.header)

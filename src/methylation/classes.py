@@ -99,7 +99,6 @@ class PhasedVariants:
     def __load_phased_variants(self, vcf):
         for required_filter in ["GT", "PS"]:
             if required_filter not in vcf.filters:
-                # TODO: raise warning that the required filters aren't available
                 vcf.make_filter(required_filter)
 
         for sample in vcf.samples:
