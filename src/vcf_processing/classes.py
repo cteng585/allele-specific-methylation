@@ -26,7 +26,7 @@ class VCF:
         self.__path: Path | None = Path(path) if path else None
         self.samples: list[str] | None = None
         self.__data: pl.DataFrame | None = data
-        self.__post_init()
+        self.__post_init__()
 
     def __del__(self):
         if self.__has_tempfiles:
@@ -41,22 +41,33 @@ class VCF:
                         )
             self.__has_tempfiles = False
 
-    def __post_init(self):
+    def __post_init__(self):
         if self.__bcf:
             self.__header = self.__bcf.header
-            self.samples = self.__bcf.header.samples
+            try:
+                self.samples = str(self.__bcf.header).splitlines()[-1].split("\t")[9:]
+            except IndexError:
+                msg = "Could not parse samples from header"
+                raise ValueError(msg)
             self.path = Path(self.__bcf.filename.decode()) if not self.path else self.path
 
         elif self.path:
             self.__bcf = pysam.VariantFile(self.path)
+            try:
+                self.samples = str(self.__bcf.header).splitlines()[-1].split("\t")[9:]
+            except IndexError:
+                msg = "Could not parse samples from header"
+                raise ValueError(msg)
             self.__header = self.__bcf.header
-            self.samples = self.__bcf.header.samples
 
         else:
             if self.__header is None:
                 raise ValueError("Header must be provided if no BCF object is given.")
-
-            self.samples = self.__header.samples
+            try:
+                self.samples = self.data.drop("index").columns[9:]
+            except IndexError:
+                msg = "Could not parse samples from header"
+                raise ValueError(msg)
 
             # if the bcf doesn't exist, create a tempfile that stores the data
             # and create a pysam.VariantFile object from that
@@ -72,12 +83,13 @@ class VCF:
             self.__managed_files.append((self.path.with_suffix(".gz.csi"), True))
             self.__managed_files.append((self.path.with_suffix(".gz.tbi"), True))
 
-            write_data = self.data.select(
-                pl.col("CHROM", "POS", "ID", "REF", "ALT", "QUAL", "FILTER", "INFO", "FORMAT", *self.samples),
-            )
+            write_data = self.data.rename({"CHROM": "#CHROM"}).drop("index")
 
             with open(self.path, "w") as outfile:
-                outfile.write(str(self.__header))
+                outfile.write("\n".join(str(self.__header).splitlines()[:-1]))
+                outfile.write("\n")
+                outfile.write("\t".join(write_data.columns))
+                outfile.write("\n")
                 write_data.write_csv(
                     outfile,
                     include_header=False,
@@ -103,7 +115,7 @@ class VCF:
 
     @property
     def header(self):
-        return self.__header
+        return self.__bcf.header
 
     @property
     def filters(self):

@@ -408,3 +408,51 @@ def map_phasing(
     )
 
     return VCF(updated_data, header=new_vcf.header)
+
+
+def filter_hq_indels(
+    indel_fn: str | Path,
+    sample_id: str,
+    sample_metadata: str | Path | pl.DataFrame,
+) -> VCF:
+    if not isinstance(sample_metadata, pl.DataFrame):
+        sample_metadata = pl.read_csv(sample_metadata, separator="\t", ignore_errors=True)
+
+    indel_vcf = read_vcf(indel_fn)
+
+    sample_metadata = sample_metadata.filter(pl.col("POG_ID") == sample_id)
+    mutect_tumor_id = sample_metadata.select("illumina_tumour_lib").item()
+    mutect_normal_id = sample_metadata.select("illumina_normal_lib").item()
+    strelka_tumor_id, strelka_normal_id = "TUMOR", "NORMAL"
+
+    indel_vcf.make_filter("GT")
+
+    # make sure there's not contrasting genotypes
+    if not indel_vcf.check_filters("GT").filter(
+        (pl.col(strelka_normal_id) != ".") | (pl.col(strelka_tumor_id) != ".")
+    ).is_empty():
+        msg = f"strelka called genotypes found in {sample_id} indel VCF"
+        raise ValueError(msg)
+
+    write_data = (
+        indel_vcf.data
+
+        # only consider indels where genotype data is available from mutect2 for
+        # both the normal and tumor samples
+        .join(
+            indel_vcf.check_filters("GT").filter(
+                pl.all_horizontal(
+                    (pl.col(mutect_normal_id) != ".") & (pl.col(mutect_tumor_id) != ".")
+                )
+            ).select("CHROM", "POS"),
+            on=["CHROM", "POS"],
+            how="inner",
+        )
+
+        # only consider indels that have been called by both strelka2 and mutect2
+        .filter(pl.all_horizontal(pl.col(*indel_vcf.samples) != "."))
+    ).drop("NORMAL", "TUMOR").rename({mutect_normal_id: "NORMAL", mutect_tumor_id: "TUMOR"})
+
+    filtered_indels = VCF(write_data, header=indel_vcf.header)
+
+    return filtered_indels
