@@ -71,6 +71,24 @@ class DMR(GenomeCoord):
         return abs(self.__methylation_region_1 - self.__methylation_region_2)
 
     @property
+    def methylated(self):
+        if self.methylation_1 > self.methylation_2:
+            return "HP1"
+        elif self.methylation_1 < self.methylation_2:
+            return "HP2"
+        else:
+            raise ValueError("Methylation levels are equal, cannot determine methylated haplotype.")
+
+    @property
+    def unmethylated(self):
+        if self.methylation_1 < self.methylation_2:
+            return "HP1"
+        elif self.methylation_1 > self.methylation_2:
+            return "HP2"
+        else:
+            raise ValueError("Methylation levels are equal, cannot determine unmethylated haplotype.")
+
+    @property
     def num_cpgs(self):
         return self.__num_cpgs
 
@@ -154,24 +172,3 @@ class PhasedVariants:
 
     def pos(self, coordinates: str):
         return self.__vcf.pos(coordinates)
-
-    def germline_somatic_split(self, sample_name: str, somatic_vcf: VCF) -> None:
-        self.data[sample_name] = pl.concat(
-            [
-                self.data[sample_name].join(
-                    somatic_vcf.data.select("CHROM", "POS"),
-                    on=["CHROM", "POS"],
-                    how="anti",
-                ).with_columns(
-                    pl.lit("germline").alias("variant_type"),
-                ),
-                self.data[sample_name].join(
-                    somatic_vcf.data.select("CHROM", "POS"),
-                    on=["CHROM", "POS"],
-                    how="inner",
-                ).with_columns(
-                    pl.lit("somatic").alias("variant_type"),
-                ),
-            ]
-        )
-        return
