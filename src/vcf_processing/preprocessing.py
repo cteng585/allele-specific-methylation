@@ -30,7 +30,7 @@ def update_variant_gt(
     record_idx: int,
     ref: str,
     alt: str,
-    new_gt: list[int, int],
+    new_gt: list[int],
     sample: str,
 ) -> tuple[str, str]:
     """Update the genotype for a given record index and sample in the source VCF
@@ -80,7 +80,9 @@ def update_variant_gt(
     return ":".join(data_format), ":".join(sample_data)
 
 
-def find_max_dp_gt(variant_group: pl.DataFrame | pl.LazyFrame) -> tuple[str, str, list[int, int]]:
+def find_max_dp_gt(
+    variant_group: pl.DataFrame | pl.LazyFrame,
+) -> tuple[str, str, list[int]]:
     """Find the genotype that corresponds to the variant record with the highest read depth
 
     this is per variant group. if there is more than one record corresponding to the maximum
@@ -215,7 +217,7 @@ def filter_no_genotype(vcf: VCF):
     :return:
     """
     filtered_data = vcf.data.filter(
-        pl.col("FORMAT").str.split(":").list.contains("GT")
+        pl.col("FORMAT").str.split(":").list.contains("GT"),
     )
     filtered_vcf = VCF(filtered_data, header=vcf.header)
 

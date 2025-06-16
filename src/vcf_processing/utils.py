@@ -3,7 +3,6 @@ import re
 import shutil
 import subprocess
 import tempfile
-from collections.abc import Iterable
 from pathlib import Path
 
 from src.vcf_processing.parse import read_vcf
@@ -228,6 +227,13 @@ def merge(vcf_fns: list[str | Path], output: str | Path) -> Path:
 
 
 def os_file(fn: str | Path) -> str:
+    """Determine the file type of a given file using the `file` command
+
+    only "BGZF" or "VCF" is expected
+
+    :param fn: the filename to check
+    :return: the file type as a string
+    """
     try:
         os_file_output = subprocess.run(["file", fn], check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
