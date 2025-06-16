@@ -9,5 +9,11 @@ wheels/
 # Virtual environments
 .venv
 
+# Authentication files
+.api_pwd
+
 # Data
 data/
+
+# scp'd stuff
+scp/
