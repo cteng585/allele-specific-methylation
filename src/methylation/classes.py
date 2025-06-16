@@ -144,8 +144,8 @@ class PhasedVariants:
 
                 # split the haplotype lists into two separate columns for each allele
                 .with_columns(
-                    pl.col("HP_lists").list.get(0).alias("HP1"),
-                    pl.col("HP_lists").list.get(1).alias("HP2")
+                    pl.col("HP_lists").list.get(0).cast(pl.Int8).alias("HP1"),
+                    pl.col("HP_lists").list.get(1).cast(pl.Int8).alias("HP2")
                 )
 
                 # remove the HP_lists column since it's no longer needed
