@@ -28,11 +28,12 @@ def setup_workspace(temp_dir: str | Path | None) -> Path:
     return temp_dir_path
 
 
-def reheader(vcf_fn: str | Path, rename_dict: dict[str, str]) -> Path:
+def reheader(vcf_fn: str | Path, rename_dict: dict[str, str], output_fn: str | Path = None) -> Path | None:
     """Bcftools wrapper for reheader-ing a VCF and re-indexing the output if necessary
 
     :param vcf_fn: the filename of the VCF to reheader
     :param rename_dict: the samples to rename
+    :param output_fn: the output filename. if None, a temporary file will be created
     :return: the Path to the reheadered VCF
     """
     if shutil.which("bcftools") is None:
@@ -40,7 +41,16 @@ def reheader(vcf_fn: str | Path, rename_dict: dict[str, str]) -> Path:
         raise OSError(msg)
 
     vcf_fn = Path(vcf_fn)
-    output_fn = Path(vcf_fn.parent) / f"{vcf_fn.stem}.reheadered{vcf_fn.suffix}"
+
+    if output_fn is None:
+        match vcf_fn.suffix:
+            case ".vcf":
+                output_fn = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp.vcf").name
+            case ".gz":
+                output_fn = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp.vcf.gz").name
+            case _:
+                msg = f"File type {vcf_fn.suffix} not supported for reheadering"
+                raise NotImplementedError(msg)
 
     renaming_fp = tempfile.NamedTemporaryFile(delete=False)
     for old_name, new_name in rename_dict.items():
@@ -154,7 +164,7 @@ def concat(vcf_fns: list[str | Path], output: str | Path) -> Path:
     return output
 
 
-def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path | None:
+def subset(vcf_fn: str | Path, samples: str | list[str], output_fn: str | Path | None = None) -> Path | None:
     """Bcftools wrapper for subsetting a VCF by sample name
 
     The subset name is the name of the original VCF with the sample names appended to it
@@ -170,13 +180,23 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path | None:
         raise OSError(msg)
 
     vcf_fn = Path(vcf_fn)
-    output = ".".join(samples) if isinstance(samples, list) else samples
-    output = vcf_fn.parent / f"{str(vcf_fn).removesuffix("".join(vcf_fn.suffixes))}.{output}.vcf.gz"
+
+    if output_fn is None:
+        match vcf_fn.suffix:
+            case ".vcf":
+                output_fn = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp.vcf").name
+            case ".gz":
+                output_fn = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp.vcf.gz").name
+            case _:
+                msg = f"File type {vcf_fn.suffix} not supported for subsetting"
+                raise NotImplementedError(msg)
+    else:
+        output_fn = Path(output_fn)
 
     if isinstance(samples, list):
         samples = ",".join(samples)
 
-    args = ["bcftools", "view", "-s", samples, "-o", output, "--no-version", vcf_fn]
+    args = ["bcftools", "view", "-s", samples, "-o", output_fn, "--no-version", vcf_fn]
 
     try:
         subprocess.run(args, check=True, capture_output=True)
@@ -186,9 +206,9 @@ def subset(vcf_fn: str | Path, samples: str | list[str]) -> Path | None:
         msg = f"bcftools returned error: {e.stderr.decode('utf-8')}"
         raise ValueError(msg)
 
-    index(output)
+    index(output_fn)
 
-    return output
+    return output_fn
 
 
 def merge(vcf_fns: list[str | Path], output: str | Path) -> Path:

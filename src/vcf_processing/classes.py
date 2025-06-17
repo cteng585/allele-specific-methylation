@@ -22,7 +22,7 @@ class VCF:
         self.__records: list[pysam.VariantRecord] | None = None
         self.__filters: dict[str, pl.DataFrame] = {}
         self.__has_tempfiles: bool = False
-        self.__managed_files: list[tuple[Path, bool]] = []
+        self.__associated_files: list[Path] = []
         self.__path: Path | None = Path(path) if path else None
         self.samples: list[str] | None = None
         self.__data: pl.DataFrame | None = data
@@ -30,19 +30,27 @@ class VCF:
 
     def __del__(self):
         if self.__has_tempfiles:
-            for fp in set(self.__managed_files):
-                if fp[0].exists() and fp[1]:
+            for fp in set(self.__associated_files):
+                if fp.exists() and re.search(r"\.tmp\.", str(fp)):
                     try:
-                        os.remove(fp[0])
+                        os.remove(fp)
                     except FileNotFoundError:
                         warnings.warn(
-                            message=f"Temporary file {fp[0]} not found. It may have already been deleted.",
+                            message=f"Temporary file {fp} not found. It may have already been deleted.",
                             category=UserWarning,
                         )
             self.__has_tempfiles = False
 
     def __post_init__(self):
         if self.__bcf:
+            if re.search(r"\.tmp\.", str(self.__bcf.filename.decode())):
+                msg = (
+                    "The substring '.tmp.' was found in the BCF filename. This substring is reserved for temporary "
+                    "files. Renaming the BCF file to not include this substring is recommended to avoid erroneous "
+                    "file deletion on garbage collection."
+                )
+                warnings.warn(msg, category=UserWarning)
+
             self.__header = self.__bcf.header
             try:
                 self.samples = str(self.__bcf.header).splitlines()[-1].split("\t")[9:]
@@ -52,6 +60,14 @@ class VCF:
             self.path = Path(self.__bcf.filename.decode()) if not self.path else self.path
 
         elif self.path:
+            if re.search(r"\.tmp\.", str(self.path)):
+                msg = (
+                    "The substring '.tmp.' was found in the BCF filename. This substring is reserved for temporary "
+                    "files. Renaming the BCF file to not include this substring is recommended to avoid erroneous "
+                    "file deletion on garbage collection."
+                )
+                warnings.warn(msg, category=UserWarning)
+
             self.__bcf = pysam.VariantFile(self.path)
             try:
                 self.samples = str(self.__bcf.header).splitlines()[-1].split("\t")[9:]
@@ -71,17 +87,16 @@ class VCF:
 
             # if the bcf doesn't exist, create a tempfile that stores the data
             # and create a pysam.VariantFile object from that
-            self.__has_tempfiles = True
-            temp_bcf = tempfile.NamedTemporaryFile(delete=False)
+            temp_bcf = tempfile.NamedTemporaryFile(delete=False, suffix=".tmp.vcf")
             temp_bcf.close()
             self.path = Path(temp_bcf.name)
-            self.__managed_files.append((self.path, True))
+            self.__associated_files.append(self.path)
 
             # add the presumed path of the VCF file index if the VCF is a compressed tempfile
             # to try to clean up the index file on garbage collection
-            self.__managed_files.append((self.path.with_suffix(".gz"), True))
-            self.__managed_files.append((self.path.with_suffix(".gz.csi"), True))
-            self.__managed_files.append((self.path.with_suffix(".gz.tbi"), True))
+            self.__associated_files.append(self.path.with_suffix(".gz"))
+            self.__associated_files.append(self.path.with_suffix(".gz.csi"))
+            self.__associated_files.append(self.path.with_suffix(".gz.tbi"))
 
             write_data = self.data.rename({"CHROM": "#CHROM"}).drop("index")
 
@@ -97,6 +112,9 @@ class VCF:
                 )
 
             self.__bcf = pysam.VariantFile(self.path)
+
+        if re.search(r"\.tmp\.", self.__bcf.filename.decode()):
+            self.__has_tempfiles = True
 
     @property
     def data(self):
@@ -157,7 +175,7 @@ class VCF:
             raise TypeError(f"Expected str or Path, got {type(path)}")
 
         if self.__has_tempfiles:
-            self.__managed_files.append((self.path, True))
+            self.__associated_files.append(self.path)
             warnings.warn(
                 category=UserWarning,
                 message=(
@@ -167,6 +185,21 @@ class VCF:
                 ),
             )
 
+    def add_file(self, file_path: str | Path, is_tempfile: bool = False):
+        self.__associated_files.append(file_path)
+        if is_tempfile:
+            self.__has_tempfiles = True
+            warnings.warn(
+                category=UserWarning,
+                message=(
+                    f"The file {file_path} is a temporary file. It will be cleaned up on garbage collection. "
+                    "If you want to keep this file, please copy it to a permanent location."
+                ),
+            )
+            if Path(file_path).suffix == ".vcf":
+                self.__associated_files.append(self.path.with_suffix(".gz"))
+                self.__associated_files.append(self.path.with_suffix(".gz.csi"))
+                self.__associated_files.append(self.path.with_suffix(".gz.tbi"))
 
     def check_filters(self, filter_name):
         if filter_name not in self.__filters:

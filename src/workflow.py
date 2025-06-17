@@ -100,7 +100,7 @@ def combine_illumina_ont(
                 )
 
     # concatenating the SNV and indel VCFs
-    snv_indel_fn = tempfile.NamedTemporaryFile(delete=False)
+    snv_indel_fn = tempfile.NamedTemporaryFile(delete=False, suffix=".snv.indel.tmp.vcf.gz")
     snv_indel_fn.close()
     snv_indel_vcf = read_vcf(
         concat(
@@ -128,8 +128,10 @@ def combine_illumina_ont(
         [subset_vcfs["long_read_normal"], subset_vcfs["long_read_sample"]], strict=False,
     ):
         if subset_short_read is not None and subset_long_read is not None:
-            concat_vcf = tempfile.NamedTemporaryFile(delete=False)
+            concat_vcf = tempfile.NamedTemporaryFile(delete=False, suffix=f".{vcf_type}.concat.tmp.vcf.gz")
             concat_vcf.close()
+
+            # subsets have .path attributes at this point since they will be VCF objects if subset exists
             concat_vcf = read_vcf(
                 concat(
                     [subset_short_read.path, subset_long_read.path],
