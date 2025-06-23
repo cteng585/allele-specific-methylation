@@ -190,9 +190,11 @@ def deduplicate_gt(source_vcf: VCF, variant_group: pl.DataFrame, sample: str) ->
         )
 
         # only keep the record with the highest read depth since this is the one
-        # most likely to have the most accurate variant info
+        # most likely to have the most accurate variant info. if read depths are tied
+        # keep the record with the most info
         .filter(
-            pl.col("DP") == pl.col("DP").max(),
+            (pl.col("DP") == pl.col("DP").max()) &
+            (pl.col("FORMAT").str.split(":").list.len() == pl.col("FORMAT").str.split(":").list.len().max())
         )
 
         # remove the columns that were used to deduplicate the genotype
