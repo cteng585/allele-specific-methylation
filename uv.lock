@@ -16,6 +16,7 @@ dependencies = [
     { name = "polars" },
     { name = "pyarrow" },
     { name = "pysam" },
+    { name = "pyyaml" },
     { name = "scipy" },
     { name = "setuptools" },
 ]
@@ -38,6 +39,7 @@ requires-dist = [
     { name = "polars", specifier = ">=1.22.0" },
     { name = "pyarrow", specifier = ">=19.0.1" },
     { name = "pysam", specifier = ">=0.23.0" },
+    { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "scipy", specifier = ">=1.15.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
 ]
