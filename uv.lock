@@ -5,7 +5,7 @@ requires-python = ">=3.12"
 [[package]]
 name = "allele-specific-methylation"
 version = "0.1.0"
-source = { virtual = "." }
+source = { editable = "." }
 dependencies = [
     { name = "biopython" },
     { name = "click" },
@@ -17,6 +17,7 @@ dependencies = [
     { name = "pyarrow" },
     { name = "pysam" },
     { name = "scipy" },
+    { name = "setuptools" },
 ]
 
 [package.dev-dependencies]
@@ -38,6 +39,7 @@ requires-dist = [
     { name = "pyarrow", specifier = ">=19.0.1" },
     { name = "pysam", specifier = ">=0.23.0" },
     { name = "scipy", specifier = ">=1.15.2" },
+    { name = "setuptools", specifier = ">=75.8.0" },
 ]
 
 [package.metadata.requires-dev]
