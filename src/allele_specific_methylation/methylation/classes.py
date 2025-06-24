@@ -2,7 +2,7 @@ import re
 
 import polars as pl
 
-from src.vcf_processing.classes import VCF
+from allele_specific_methylation.vcf_processing.classes import VCF
 
 
 class GenomeCoord:

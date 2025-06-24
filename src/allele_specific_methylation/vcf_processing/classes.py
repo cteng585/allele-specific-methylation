@@ -19,6 +19,8 @@ class VCF:
     ):
         self.__bcf: pysam.VariantFile | None = bcf
         self.__header: pysam.VariantHeader | None = header
+        self.__library_id_normal: str | None = None
+        self.__library_id_tumor: str | None = None
         self.__records: list[pysam.VariantRecord] | None = None
         self.__filters: dict[str, pl.DataFrame] = {}
         self.__has_tempfiles: bool = False
@@ -116,6 +118,12 @@ class VCF:
         if re.search(r"\.tmp\.", self.__bcf.filename.decode()):
             self.__has_tempfiles = True
 
+        for record in self.__bcf.header.records:
+            if record.key == "normal_sample":
+                self.__library_id_normal = record.value
+            elif record.key == "tumor_sample":
+                self.__library_id_tumor = record.value
+
     @property
     def data(self):
         return self.__data
@@ -184,6 +192,14 @@ class VCF:
                     f"the new path {self.path} on garbage collection."
                 ),
             )
+
+    @property
+    def normal_id(self):
+        return self.__library_id_normal
+
+    @property
+    def tumor_id(self):
+        return self.__library_id_tumor
 
     def add_file(self, file_path: str | Path, is_tempfile: bool = False):
         self.__associated_files.append(file_path)

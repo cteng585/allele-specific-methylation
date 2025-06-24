@@ -5,7 +5,7 @@ import subprocess
 import tempfile
 from pathlib import Path
 
-from src.vcf_processing.parse import read_vcf
+from allele_specific_methylation.vcf_processing.parse import read_vcf
 
 
 def setup_workspace(temp_dir: str | Path | None) -> Path:

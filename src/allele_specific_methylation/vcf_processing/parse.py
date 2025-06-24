@@ -4,7 +4,7 @@ from pathlib import Path
 import polars as pl
 import pysam
 
-from src.vcf_processing.classes import VCF
+from allele_specific_methylation.vcf_processing.classes import VCF
 
 
 def read_vcf(source: str | Path) -> VCF:

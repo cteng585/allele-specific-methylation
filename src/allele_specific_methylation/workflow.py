@@ -6,13 +6,13 @@ from pathlib import Path
 import polars as pl
 import pysam
 
-from src.methylation.classes import PhasedVariants
-from src.methylation.utils import hamming
+from allele_specific_methylation.methylation.classes import PhasedVariants
+from allele_specific_methylation.methylation.utils import hamming
 
-from src.vcf_processing.classes import VCF
-from src.vcf_processing.parse import read_vcf
-from src.vcf_processing.preprocessing import deduplicate_gt
-from src.vcf_processing.utils import compress, concat, index, merge, os_file, reheader, subset
+from allele_specific_methylation.vcf_processing.classes import VCF
+from allele_specific_methylation.vcf_processing.parse import read_vcf
+from allele_specific_methylation.vcf_processing.preprocessing import deduplicate_gt
+from allele_specific_methylation.vcf_processing.utils import compress, concat, index, merge, os_file, reheader, subset
 
 
 def combine_illumina_ont(

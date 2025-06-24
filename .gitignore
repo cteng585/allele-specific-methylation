@@ -17,3 +17,6 @@ data/
 
 # scp'd stuff
 scp/
+
+# Adhoc Scripts
+scripts/
