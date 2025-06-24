@@ -319,8 +319,11 @@ class VCF:
                 with bgzf.BgzfWriter(path, "wb") as outfile:
                     outfile.write("\n".join(header))
                     outfile.write("\n")
+                    outfile.write("\t".join(write_data.columns).encode())
+                    outfile.write("\n")
                     for row in write_data.rows():
                         outfile.write("\t".join(str(value) for value in row).encode())
+                        outfile.write("\n".encode())
 
             case ".vcf":
                 with open(path, "w") as outfile:
