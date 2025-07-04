@@ -11,53 +11,53 @@ import yaml
 URL = os.environ.get("BIOAPPS_API_URL")
 USERNAME = os.environ.get("BIOAPPS_USERNAME")
 PASSWORD = os.environ.get("BIOAPPS_PASSWORD")
-BIOAPPS_HEADERS = {"Content-Type": "application/json", "Accept": "application/json"}
 
+class RequestHandler:
+    def __init__(
+        self,
+        url: str = URL,
+        username: str = USERNAME,
+        password: str = PASSWORD,
+        headers: dict | None = None,
+    ):
+        self.__request_handler = requests.Session()
+        self.__url = url
+        self.__username = username
+        self.__password = password
+        self.__headers = (
+            {"Content-Type": "application/json", "Accept": "application/json"} if headers is None else headers
+        )
 
-def init_handler():
-    request_handle = requests.Session()
+        auth_request = {
+            "username": self.__username,
+            "password": self.__password,
+        }
+        response = self.__request_handler.post(
+            os.path.join(URL, "session"),
+            json=auth_request,
+            headers=self.__headers
+        )
 
-    auth_request = {
-        "username": USERNAME,
-        "password": PASSWORD,
-    }
+        if response.status_code == requests.codes.ok:
+            token = response.json().get("token")
+            self.__headers.update({"X-Token": token})
+        else:
+            raise Exception(f"Authentication failed: {response.status_code} {response.text}")
 
-    response = request_handle.post(
-        os.path.join(URL, "session"),
-        json=auth_request,
-        headers=BIOAPPS_HEADERS
-    )
-
-    if response.status_code == requests.codes.ok:
-        token = response.json().get("token")
-        BIOAPPS_HEADERS.update({"X-Token": token})
-    else:
-        raise Exception(f"Authentication failed: {response.status_code} {response.text}")
-
-    return request_handle
-
-
-# TODO: function to parse POG ids from provided path
-
-def get_request(
-    request_handle: requests.Session,
-    endpoint: str,
-    params: dict | None = None,
-    headers: dict | None = None,
-):
-    response = request_handle.get(
-        os.path.join(URL, endpoint),
-        params=params,
-        headers=headers
-    )
-    if response.status_code == requests.codes.ok:
-        return response.json()
-    else:
-        raise Exception(f"Request failed: ({response.status_code}) {response.text}")
+    def get(self, endpoint: str, params: dict | None = None):
+        response = self.__request_handler.get(
+            os.path.join(self.__url, endpoint),
+            params=params,
+            headers=self.__headers,
+        )
+        if response.status_code == requests.codes.ok:
+            return response.json()
+        else:
+            raise Exception(f"Request failed: ({response.status_code}) {response.text}")
 
 
 def patient_identifier_mappings(
-    request_handle: requests.Session,
+    request_handle: RequestHandler,
     participant_study_identifiers: list[str],
 ) -> list[str]:
     """POG IDs are not the primary identifiers in the BioApps database
@@ -71,8 +71,7 @@ def patient_identifier_mappings(
     patient_analysis_params = {
         "participant_study_identifiers": ",".join(participant_study_identifiers),
     }
-    response = get_request(
-        request_handle,
+    response = request_handle.get(
         "patient_analysis",
         params=patient_analysis_params,
     )
@@ -83,8 +82,7 @@ def patient_identifier_mappings(
         "relations": "sources",
         "sources_columns": "participant_study_identifier",
     }
-    response = get_request(
-        request_handle,
+    response = request_handle.get(
         "patient",
         params=patient_params,
     )
@@ -110,15 +108,14 @@ def patient_identifier_mappings(
 
 
 def patient_libraries(
-    request_handle: requests.Session,
+    request_handle: RequestHandler,
     participant_study_identifiers: list[str],
     patient_mappings: dict[str, str],
 ):
     library_params = {
         "patient": ",".join(patient_mappings.keys())
     }
-    response = get_request(
-        request_handle,
+    response = request_handle.get(
         "library/info",
         params=library_params,
     )
@@ -173,7 +170,7 @@ def generate_config(
     participant_study_identifiers = [
         path_obj.stem for path_obj in Path(analysis_dir).iterdir()
     ]
-    request_handle = init_handler()
+    request_handle = RequestHandler()
     bioapps_id_to_pog = patient_identifier_mappings(request_handle, participant_study_identifiers)
     pog_libraries = patient_libraries(request_handle, participant_study_identifiers, bioapps_id_to_pog)
 

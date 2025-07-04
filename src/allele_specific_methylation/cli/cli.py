@@ -134,7 +134,7 @@ def combine_vcfs(
     default="config.yaml",
     help="Where to write the configuration file, defaults to 'config.yaml'",
 )
-def bioapps_config(
+def make_bioapps_config(
     analysis_dir: click.Path(exists=True),
     config_type: str = "yaml",
     config_path: click.Path = "config.yaml",
@@ -150,7 +150,7 @@ def bioapps_config(
     :param config_path: where to write the configuration file, defaults to 'config.yaml'
     :return:
     """
-    bioapps_config(
+    bioapps_config.generate_config(
         analysis_dir=analysis_dir,
         config_type=config_type,
         config_path=config_path,
