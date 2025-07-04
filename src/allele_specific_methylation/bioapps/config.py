@@ -31,7 +31,7 @@ class RequestHandler:
             "password": password,
         }
         response = self.__request_handler.post(
-            os.path.join(URL, "session"),
+            os.path.join(self.__url, "session"),
             json=auth_request,
             headers=self.__headers
         )
@@ -61,7 +61,7 @@ class RequestHandler:
             headers=self.__headers,
         )
         if response.status_code == requests.codes.ok:
-            return response.json()
+            return response
         else:
             raise Exception(f"Request failed: ({response.status_code}) {response.text}")
 
@@ -79,7 +79,7 @@ def patient_identifier_mappings(
     :return:
     """
     patient_analysis_params = {
-        "participant_study_identifiers": ",".join(participant_study_identifiers),
+        "participant_study_identifier": ",".join(participant_study_identifiers),
     }
     response = request_handle.get(
         "patient_analysis",
@@ -100,7 +100,7 @@ def patient_identifier_mappings(
     # patient identifier is the primary ID in the BioApps db for a given patient
     # participant_study_identifier is ordinarily the POG ID but may also be a PATH ID
     patient_mappings = {}
-    for record in response:
+    for record in response.json():
         patient_identifier = record["patient_identifier"]
         patient_study_ids = [
             source.get("participant_study_identifier")
@@ -133,7 +133,7 @@ def patient_libraries(
     participant_libraries = {
         participant_study_id: [] for participant_study_id in participant_study_identifiers
     }
-    for record in response:
+    for record in response.json():
         library_id = record.get("name", None)
         if not library_id:
             continue
