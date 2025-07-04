@@ -3,6 +3,7 @@ from typing import Optional
 
 import click
 
+from allele_specific_methylation.bioapps import config as bioapps_config
 from allele_specific_methylation.parse import parse_combine_vcf_config
 from allele_specific_methylation.workflow import combine_illumina_ont, filter_hq_indels
 
@@ -18,7 +19,7 @@ def asm():
 @click.argument("sample_id")
 @click.argument("sample_metadata")
 def filter_indels(filename: click.Path(exists=True), sample_id: str, sample_metadata: str) -> None:
-    """Filter Indel VCF to only include high quality indels
+    """Filter indel VCF to only include high quality indels
 
     :param filename: path to VCF indel file
     :param sample_id: sample ID of the sample
@@ -115,6 +116,45 @@ def combine_vcfs(
             long_read_fn_rename=long_read_rename,
             output_fn=output_fn,
         )
+
+
+@asm.command()
+@click.argument(
+    "analysis_dir", type=click.Path(exists=True)
+)
+@click.option(
+    "--config_type",
+    type=click.Choice(["yaml", "json"], case_sensitive=False),
+    default="yaml",
+    help="Format to write the configuration file, either 'yaml' or 'json'",
+)
+@click.option(
+    "--config_path",
+    type=click.Path(),
+    default="config.yaml",
+    help="Where to write the configuration file, defaults to 'config.yaml'",
+)
+def bioapps_config(
+    analysis_dir: click.Path(exists=True),
+    config_type: str = "yaml",
+    config_path: click.Path = "config.yaml",
+):
+    """Generate a configuration file for combining VCF files
+
+    Requires access to the BioApps API to retrieve patient and library information. Auth info
+    should be set in the environment variables BIOAPPS_USERNAME and BIOAPPS_PASSWORD. API URL
+    should be set in the environment variable BIOAPPS_API_URL.
+
+    :param analysis_dir: the directory containing the analysis directories for each participant
+    :param config_type: format to write the configuration file, either 'yaml' or 'json'
+    :param config_path: where to write the configuration file, defaults to 'config.yaml'
+    :return:
+    """
+    bioapps_config(
+        analysis_dir=analysis_dir,
+        config_type=config_type,
+        config_path=config_path,
+    )
 
 
 if __name__ == "__main__":
