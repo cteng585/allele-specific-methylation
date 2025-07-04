@@ -88,7 +88,7 @@ def patient_identifier_mappings(
     patient_identifiers = [record["patient_identifier"] for record in response.json()]
 
     patient_params = {
-        "patient_identifiers": ",".join(patient_identifiers),
+        "patient_identifier": ",".join(patient_identifiers),
         "relations": "sources",
         "sources_columns": "participant_study_identifier",
     }
@@ -177,6 +177,7 @@ def generate_config(
     config_type: Literal["yaml", "json"] = "yaml",
     config_path: str | Path = "config.yaml",
 ):
+    analysis_dir = Path(analysis_dir.removesuffix("/"))
     participant_study_identifiers = [
         path_obj.stem for path_obj in Path(analysis_dir).iterdir()
     ]
