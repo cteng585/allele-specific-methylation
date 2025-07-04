@@ -22,15 +22,13 @@ class RequestHandler:
     ):
         self.__request_handler = requests.Session()
         self.__url = url
-        self.__username = username
-        self.__password = password
         self.__headers = (
             {"Content-Type": "application/json", "Accept": "application/json"} if headers is None else headers
         )
 
         auth_request = {
-            "username": self.__username,
-            "password": self.__password,
+            "username": username,
+            "password": password,
         }
         response = self.__request_handler.post(
             os.path.join(URL, "session"),
@@ -43,6 +41,18 @@ class RequestHandler:
             self.__headers.update({"X-Token": token})
         else:
             raise Exception(f"Authentication failed: {response.status_code} {response.text}")
+
+    @property
+    def handler(self):
+        return self.__request_handler
+
+    @property
+    def headers(self):
+        return self.__headers
+
+    @property
+    def url(self):
+        return self.__url
 
     def get(self, endpoint: str, params: dict | None = None):
         response = self.__request_handler.get(
