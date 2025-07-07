@@ -545,7 +545,12 @@ def filter_hq_indels(
 
         # drop the strelka columns since they don't contain any useful information
         # but reserve the informative "NORMAL" and "TUMOR" names
-        .drop("NORMAL", "TUMOR")
+        .drop(
+            pl.col(
+                library_name for library_name in [strelka_normal_id, strelka_tumor_id]
+                if library_name in indel_vcf.samples
+            )
+        )
         .rename(rename_dict)
     )
 
