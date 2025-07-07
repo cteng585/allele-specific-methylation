@@ -15,29 +15,42 @@ def asm():
 
 
 @asm.command()
-@click.argument("filename")
 @click.argument("sample_id")
-@click.argument("sample_metadata")
-def filter_indels(filename: click.Path(exists=True), sample_id: str, sample_metadata: str) -> None:
+@click.option("--filename", "filename", default=None)
+@click.option("--sample_metadata", "sample_metadata", default=None)
+@click.option("--config", "config", default=None)
+@click.option("--overwrite", "overwrite", is_flag=True, default=False)
+def filter_indels(
+    sample_id: str,
+    filename: Optional[click.Path(exists=True)],
+    sample_metadata: str | Path | None,
+    config: str | Path | None,
+    overwrite: bool,
+) -> None:
     """Filter indel VCF to only include high quality indels
 
-    :param filename: path to VCF indel file
     :param sample_id: sample ID of the sample
+    :param filename: path to VCF indel file
     :param sample_metadata: path to a metadata file containing library IDs. see acceptable
         metadata formats in the documentation
+    :param config: path to a configuration file containing parameters for filtering indels.
+        see documentation for acceptable config formats
+    :param overwrite: overwrite existing VCF files
     :return: None
     """
-    indel_fn = Path(str(filename))
-    file_suffixes = indel_fn.suffixes
+    indel_fn = Path(str(filename)) if filename else None
 
-    filtered_indels = filter_hq_indels(
-        indel_fn=indel_fn,
+    # only one of sample metadata or config should be provided
+    if sample_metadata is not None and config is not None:
+        raise ValueError("Only one of sample_metadata or config should be provided")
+
+    filtered_indels, output_fn = filter_hq_indels(
         sample_id=sample_id,
+        indel_fn=indel_fn,
         sample_metadata=sample_metadata,
+        config=config,
+        overwrite=overwrite,
     )
-
-    output_stem = str(indel_fn).removesuffix("".join(file_suffixes))
-    output_fn = f"{output_stem}.indels_filtered.vcf.gz"
 
     filtered_indels.write(output_fn)
 

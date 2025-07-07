@@ -414,48 +414,74 @@ def map_phasing(
 
 
 def filter_hq_indels(
-    indel_fn: str | Path,
     sample_id: str,
-    sample_metadata: str | Path,
+    indel_fn: str | Path | None,
+    sample_metadata: str | Path | None,
+    config: str | Path | None = None,
+    overwrite: bool = False,
 ) -> VCF:
-    match Path(sample_metadata).suffix:
-        case ".yaml":
-            with open(sample_metadata, "r") as yaml_file:
-                sample_metadata = yaml.safe_load(yaml_file)
+    if sample_metadata:
+        if indel_fn is None:
+            msg = (
+                f"A path is expected for filtering indel VCFs when sample metadata is provided, but got None"
+            )
+            raise ValueError(msg)
 
-        case ".json":
-            with open(sample_metadata, "r") as json_file:
-                sample_metadata = json.load(json_file)
+        match Path(sample_metadata).suffix:
+            case ".tsv":
+                sample_metadata = pl.read_csv(sample_metadata, separator="\t", ignore_errors=True)
+            case ".csv":
+                sample_metadata = pl.read_csv(sample_metadata, separator=",", ignore_errors=True)
+            case _:
+                raise ValueError(f"Unsupported sample metadata file type: {sample_metadata.suffix}")
+        sample_metadata = sample_metadata.filter(pl.col("POG_ID") == sample_id).to_dicts()
+        if len(sample_metadata) > 1:
+            raise ValueError(
+                f"Multiple entries found for sample ID {sample_id} in the sample metadata file."
+            )
+        elif len(sample_metadata) == 0:
+            raise ValueError(
+                f"No entry found for sample ID {sample_id} in the sample metadata file."
+            )
+        else:
+            sample_metadata = sample_metadata[0]
+        normal_libraries = [sample_metadata.get("illumina_normal_lib")]
+        tumor_libraries = [sample_metadata.get("illumina_tumour_lib")]
 
-        case ".tsv":
-            sample_metadata = pl.read_csv(sample_metadata, separator="\t", ignore_errors=True)
+    if config:
+        if indel_fn is not None:
+            msg = (
+                f"A path for filtering indel VCFs is not expected when a config is provided, but got {indel_fn}"
+            )
+            raise ValueError(msg)
 
-        case ".csv":
-            sample_metadata = pl.read_csv(sample_metadata, separator=",", ignore_errors=True)
+        match Path(config).suffix:
+            case ".yaml":
+                with open(config, "r") as yaml_file:
+                    config = yaml.safe_load(yaml_file)
 
-        case _:
-            raise ValueError(f"Unsupported sample metadata file type: {sample_metadata.suffix}")
+            case ".json":
+                with open(config, "r") as json_file:
+                    config = json.load(json_file)
 
-    match sample_metadata:
-        case pl.DataFrame():
-            sample_metadata = sample_metadata.filter(pl.col("POG_ID") == sample_id)
-            normal_libraries = [sample_metadata.select("illumina_normal_lib").item()]
-            tumor_libraries = [sample_metadata.select("illumina_tumour_lib").item()]
+        normal_libraries, tumor_libraries = [], []
+        sample_metadata = config[sample_id]
+        indel_fn = sample_metadata["short_read_indel"].get("path")
+        for library_id, library_type in sample_metadata["short_read_indel"]["libraries"].items():
+            if re.search(r"normal", library_type, re.IGNORECASE):
+                normal_libraries.append(library_id)
+            elif re.search(r"tumor", library_type, re.IGNORECASE):
+                tumor_libraries.append(library_id)
+            else:
+                raise ValueError(f"Unknown library type: {library_type}")
 
-        case dict():
-            normal_libraries, tumor_libraries = [], []
-            sample_metadata = sample_metadata[sample_id]
-            for library_id, library_type in sample_metadata["short_read_indel"]["libraries"].items():
-                if re.search(r"normal", library_type, re.IGNORECASE):
-                    normal_libraries.append(library_id)
-                elif re.search(r"tumor", library_type, re.IGNORECASE):
-                    tumor_libraries.append(library_id)
-                else:
-                    raise ValueError(f"Unknown library type: {library_type}")
-
-        case _:
-            raise TypeError(f"Incorrect type {type(sample_metadata)}")
     strelka_tumor_id, strelka_normal_id = "TUMOR", "NORMAL"
+
+    if indel_fn is None:
+        msg = (
+            f"Could not find a path for the indel VCF of {sample_id}"
+        )
+        raise ValueError(msg)
 
     indel_vcf = read_vcf(indel_fn)
     indel_vcf.make_filter("GT")
@@ -518,4 +544,11 @@ def filter_hq_indels(
 
     filtered_indels = VCF(write_data, header=indel_vcf.header)
 
-    return filtered_indels
+    if overwrite:
+        output_fn = indel_fn
+    else:
+        file_suffixes = indel_fn.suffixes
+        output_stem = str(indel_fn).removesuffix("".join(file_suffixes))
+        output_fn = f"{output_stem}.indels_filtered.vcf.gz"
+
+    return filtered_indels, output_fn
