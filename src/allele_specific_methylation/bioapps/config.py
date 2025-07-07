@@ -20,6 +20,16 @@ class RequestHandler:
         password: str = PASSWORD,
         headers: dict | None = None,
     ):
+        if not url:
+            msg = "BIOAPPS_API_URL environment variable is not set. Please set it to the BioApps API URL."
+            raise ValueError(msg)
+        if not username:
+            msg = "BIOAPPS_USERNAME environment variable is not set. Please set it to your BioApps username."
+            raise ValueError(msg)
+        if not password:
+            msg = "BIOAPPS_PASSWORD environment variable is not set. Please set it to your BioApps password."
+            raise ValueError(msg)
+
         self.__request_handler = requests.Session()
         self.__url = url
         self.__headers = (

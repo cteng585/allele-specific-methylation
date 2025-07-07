@@ -547,7 +547,7 @@ def filter_hq_indels(
     if overwrite:
         output_fn = indel_fn
     else:
-        file_suffixes = indel_fn.suffixes
+        file_suffixes = Path(indel_fn).suffixes
         output_stem = str(indel_fn).removesuffix("".join(file_suffixes))
         output_fn = f"{output_stem}.indels_filtered.vcf.gz"
 
