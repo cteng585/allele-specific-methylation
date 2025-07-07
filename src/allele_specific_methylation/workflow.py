@@ -1,3 +1,4 @@
+import json
 import re
 import tempfile
 import warnings
@@ -5,6 +6,7 @@ from pathlib import Path
 
 import polars as pl
 import pysam
+import yaml
 
 from allele_specific_methylation.methylation.classes import PhasedVariants
 from allele_specific_methylation.methylation.utils import hamming
@@ -216,7 +218,6 @@ def combine_illumina_ont(
             index(deduplicated_vcf.path)
 
             subset_vcfs[f"deduplicated_{vcf_type}_concat"] = deduplicated_vcf
-            deduplicated_vcf.write(f"deduplicated_{vcf_type}_concat.vcf")
 
     # merge the short and long read concatenated VCFs if both are present
     if (
@@ -415,27 +416,62 @@ def map_phasing(
 def filter_hq_indels(
     indel_fn: str | Path,
     sample_id: str,
-    sample_metadata: str | Path | pl.DataFrame,
+    sample_metadata: str | Path,
 ) -> VCF:
-    if not isinstance(sample_metadata, pl.DataFrame):
-        sample_metadata = pl.read_csv(sample_metadata, separator="\t", ignore_errors=True)
+    match Path(sample_metadata).suffix:
+        case ".yaml":
+            with open(sample_metadata, "r") as yaml_file:
+                sample_metadata = yaml.safe_load(yaml_file)
 
-    indel_vcf = read_vcf(indel_fn)
+        case ".json":
+            with open(sample_metadata, "r") as json_file:
+                sample_metadata = json.load(json_file)
 
-    sample_metadata = sample_metadata.filter(pl.col("POG_ID") == sample_id)
-    mutect_tumor_id = sample_metadata.select("illumina_tumour_lib").item()
-    mutect_normal_id = sample_metadata.select("illumina_normal_lib").item()
+        case ".tsv":
+            sample_metadata = pl.read_csv(sample_metadata, separator="\t", ignore_errors=True)
+
+        case ".csv":
+            sample_metadata = pl.read_csv(sample_metadata, separator=",", ignore_errors=True)
+
+        case _:
+            raise ValueError(f"Unsupported sample metadata file type: {sample_metadata.suffix}")
+
+    match sample_metadata:
+        case pl.DataFrame():
+            sample_metadata = sample_metadata.filter(pl.col("POG_ID") == sample_id)
+            normal_libraries = [sample_metadata.select("illumina_normal_lib").item()]
+            tumor_libraries = [sample_metadata.select("illumina_tumour_lib").item()]
+
+        case dict():
+            normal_libraries, tumor_libraries = [], []
+            sample_metadata = sample_metadata[sample_id]
+            for library_id, library_type in sample_metadata["short_read_indel"]["libraries"].items():
+                if re.search(r"normal", library_type, re.IGNORECASE):
+                    normal_libraries.append(library_id)
+                elif re.search(r"tumor", library_type, re.IGNORECASE):
+                    tumor_libraries.append(library_id)
+                else:
+                    raise ValueError(f"Unknown library type: {library_type}")
+
+        case _:
+            raise TypeError(f"Incorrect type {type(sample_metadata)}")
     strelka_tumor_id, strelka_normal_id = "TUMOR", "NORMAL"
 
+    indel_vcf = read_vcf(indel_fn)
     indel_vcf.make_filter("GT")
 
-    # make sure there's not contrasting genotypes
+    # we do not expect strelka to call genotypes for variants. if there are any
+    # strelka called genotypes, then this is an error
     if not indel_vcf.check_filters("GT").filter(
         (pl.col(strelka_normal_id) != ".") | (pl.col(strelka_tumor_id) != ".")
     ).is_empty():
         msg = f"strelka called genotypes found in {sample_id} indel VCF"
         raise ValueError(msg)
 
+    included_libraries = [
+        library_id for library_id in normal_libraries + tumor_libraries
+        if library_id in indel_vcf.samples
+    ]
     write_data = (
         indel_vcf.data
 
@@ -444,7 +480,7 @@ def filter_hq_indels(
         .join(
             indel_vcf.check_filters("GT").filter(
                 pl.all_horizontal(
-                    (pl.col(mutect_normal_id) != ".") & (pl.col(mutect_tumor_id) != ".")
+                    pl.all_horizontal(pl.col(included_libraries) != ".")
                 )
             ).select("CHROM", "POS"),
             on=["CHROM", "POS"],
@@ -453,7 +489,32 @@ def filter_hq_indels(
 
         # only consider indels that have been called by both strelka2 and mutect2
         .filter(pl.all_horizontal(pl.col(*indel_vcf.samples) != "."))
-    ).drop("NORMAL", "TUMOR").rename({mutect_normal_id: "NORMAL", mutect_tumor_id: "TUMOR"})
+    )
+
+    rename_dict = {
+        library_id: "NORMAL" if library_id in normal_libraries else "TUMOR"
+        for library_id in included_libraries
+    }
+
+    # double check that there are not multiple normal libraries or multiple tumor
+    # libraries in the same indel VCF
+    if (
+        len([library_id for library_id in rename_dict if rename_dict[library_id] == "NORMAL"]) > 1 or
+        len([library_id for library_id in rename_dict if rename_dict[library_id] == "TUMOR"]) > 1
+    ):
+        msg = (
+            f"Trying to rename multiple normal or tumor libraries in {sample_id} indel VCF."
+        )
+        raise ValueError(msg)
+
+    write_data = (
+        write_data
+
+        # drop the strelka columns since they don't contain any useful information
+        # but reserve the informative "NORMAL" and "TUMOR" names
+        .drop("NORMAL", "TUMOR")
+        .rename(rename_dict)
+    )
 
     filtered_indels = VCF(write_data, header=indel_vcf.header)
 

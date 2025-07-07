@@ -23,7 +23,8 @@ def filter_indels(filename: click.Path(exists=True), sample_id: str, sample_meta
 
     :param filename: path to VCF indel file
     :param sample_id: sample ID of the sample
-    :param sample_metadata: path to sample metadata file containing library IDs
+    :param sample_metadata: path to a metadata file containing library IDs. see acceptable
+        metadata formats in the documentation
     :return: None
     """
     indel_fn = Path(str(filename))
