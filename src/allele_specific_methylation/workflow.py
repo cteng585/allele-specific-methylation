@@ -475,7 +475,7 @@ def filter_hq_indels(
             else:
                 raise ValueError(f"Unknown library type: {library_type}")
 
-    strelka_tumor_id, strelka_normal_id = "TUMOR", "NORMAL"
+    strelka_normal_id, strelka_tumor_id = "NORMAL", "TUMOR"
 
     if indel_fn is None:
         msg = (
@@ -488,9 +488,16 @@ def filter_hq_indels(
 
     # we do not expect strelka to call genotypes for variants. if there are any
     # strelka called genotypes, then this is an error
-    if not indel_vcf.check_filters("GT").filter(
-        (pl.col(strelka_normal_id) != ".") | (pl.col(strelka_tumor_id) != ".")
-    ).is_empty():
+    if (
+        not indel_vcf.check_filters("GT").filter(
+            pl.any_horizontal(
+                pl.col(
+                    library_name for library_name in [strelka_normal_id, strelka_tumor_id]
+                    if library_name in indel_vcf.samples
+                ) != "."
+            )
+        ).is_empty()
+    ):
         msg = f"strelka called genotypes found in {sample_id} indel VCF"
         raise ValueError(msg)
 
