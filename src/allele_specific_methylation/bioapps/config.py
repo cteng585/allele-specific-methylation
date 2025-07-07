@@ -197,7 +197,7 @@ def generate_config(
                 "libraries": libraries,
             },
             "short_read_indel": {
-                "path": "short_read.indels.vcf",
+                "path": f"{analysis_dir}/{study_identifier}/short_read.indels.vcf",
                 "rename": True,
                 "libraries": libraries,
             },
