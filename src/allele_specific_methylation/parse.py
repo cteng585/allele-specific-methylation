@@ -1,9 +1,12 @@
 import json
-import yaml
+import re
 from pathlib import Path
 from typing import Literal
 
+import yaml
 
+
+# TODO: this might be better served as a class
 def parse_combine_vcf_config(config_fn: str | Path, file_type: Literal["yaml", "json"]):
     """Parse a configuration file for combining VCFs for multiple samples
 
@@ -49,16 +52,26 @@ def parse_combine_vcf_config(config_fn: str | Path, file_type: Literal["yaml", "
 
             if loaded_config[sample_id][vcf_type]["rename"] is True:
                 rename_dict = {}
-                if "normal_library_id" in loaded_config[sample_id][vcf_type]:
-                    library_id = loaded_config[sample_id][vcf_type]["normal_library_id"]
-                    rename_dict[library_id] = "NORMAL"
-                if "tumor_library_id" in loaded_config[sample_id][vcf_type]:
-                    library_id = loaded_config[sample_id][vcf_type]["tumor_library_id"]
-                    rename_dict[library_id] = "TUMOR"
+                libraries = loaded_config[sample_id][vcf_type].get("libraries")
+                if libraries is None:
+                    msg = (
+                        f"Libraries as keys with library types (normal, tumor) are expected "
+                        f"when 'rename' is set to True for {vcf_type} in {sample_id}, but no "
+                        f"libraries were found"
+                    )
+                    raise ValueError(msg)
 
+                for library_id in libraries:
+                    if re.search(r"normal", libraries[library_id], re.IGNORECASE):
+                        rename_dict[library_id] = "NORMAL"
+                    elif re.search(r"tumor", libraries[library_id], re.IGNORECASE):
+                        rename_dict[library_id] = "TUMOR"
+                    else:
+                        raise ValueError(
+                            f"Library ID {library_id} does not contain an accepted library type "
+                            f"(normal/tumor) which is required for renaming"
+                        )
                 config_dict[vcf_type]["rename"] = rename_dict
-            else:
-                config_dict[vcf_type]["rename"] = None
 
         sample_configs[sample_id] = config_dict
 

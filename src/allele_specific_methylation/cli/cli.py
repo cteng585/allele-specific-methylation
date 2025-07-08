@@ -91,45 +91,49 @@ def combine_vcfs(
             case _:
                 raise ValueError(f"Unsupported config file type: {config.suffix}")
 
-        sample_configs = parse_combine_vcf_config(config, file_type=file_type)
-        for sample_id in sample_configs:
-            output_fn = Path(str(out_dir)) / f"{sample_id}.merged.vcf.gz"
-
-            combine_illumina_ont(
-                short_read_snv_fn=sample_configs[sample_id]["short_read_snv"]["path"],
-                short_read_indel_fn=sample_configs[sample_id]["short_read_indel"]["path"],
-                long_read_fn=sample_configs[sample_id]["long_read"]["path"],
-                normal_name=NORMAL_NAME,
-                tumor_name=TUMOR_NAME,
-                snv_fn_rename=sample_configs[sample_id]["short_read_snv"].get("rename", None),
-                indel_fn_rename=sample_configs[sample_id]["short_read_indel"].get("rename", None),
-                long_read_fn_rename=sample_configs[sample_id]["long_read"].get("rename", None),
-                output_fn=output_fn,
-            )
-
+        sample_config = parse_combine_vcf_config(config, file_type=file_type).get(
+            sample_id
+        )
     else:
-        output_fn = Path(str(out_dir)) / f"{sample_id}.merged.vcf.gz"
-
         short_read_rename = {
-            short_read_normal_lib: NORMAL_NAME,
-            short_read_tumor_lib: TUMOR_NAME,
+            library_id: library_type for library_id, library_type in zip(
+                [short_read_normal_lib, short_read_tumor_lib],
+                [NORMAL_NAME, TUMOR_NAME],
+            ) if library_id
         }
         long_read_rename = {
-            long_read_normal_lib: NORMAL_NAME,
-            long_read_tumor_lib: TUMOR_NAME,
+            library_id: library_type for library_id, library_type in zip(
+                [long_read_normal_lib, long_read_tumor_lib],
+                [NORMAL_NAME, TUMOR_NAME],
+            ) if library_id
+        }
+        sample_config = {
+            "short_read_snv": {
+                "path": short_read_snv_fn,
+                "rename": short_read_rename,
+            },
+            "short_read_indel": {
+                "path": short_read_indel_fn,
+                "rename": short_read_rename,
+            },
+            "long_read": {
+                "path": long_read_fn,
+                "rename": long_read_rename,
+            },
         }
 
-        combine_illumina_ont(
-            short_read_snv_fn=short_read_snv_fn,
-            short_read_indel_fn=short_read_indel_fn,
-            long_read_fn=long_read_fn,
-            normal_name=NORMAL_NAME,
-            tumor_name=TUMOR_NAME,
-            snv_fn_rename=short_read_rename,
-            indel_fn_rename=short_read_rename,
-            long_read_fn_rename=long_read_rename,
-            output_fn=output_fn,
-        )
+    output_fn = Path(str(out_dir)) / f"{sample_id}.merged.vcf.gz"
+    combine_illumina_ont(
+        short_read_snv_fn=sample_config["short_read_snv"]["path"],
+        short_read_indel_fn=sample_config["short_read_indel"]["path"],
+        long_read_fn=sample_config["long_read"]["path"],
+        normal_name=NORMAL_NAME,
+        tumor_name=TUMOR_NAME,
+        snv_fn_rename=sample_config["short_read_snv"].get("rename", None),
+        indel_fn_rename=sample_config["short_read_indel"].get("rename", None),
+        long_read_fn_rename=sample_config["long_read"].get("rename", None),
+        output_fn=output_fn,
+    )
 
 
 @asm.command()
