@@ -200,6 +200,10 @@ def generate_config(
         libraries = {
             library[0]: library[1] for library in pog_libraries[study_identifier]
         }
+
+        # account for cases where a study identifier is a constant created by the clair variant calling workflow
+        libraries["SAMPLE"] = "TUMOR"
+
         config[study_identifier] = {
             "short_read_snv": {
                 "path": f"{analysis_dir}/{study_identifier}/short_read.snvs.vcf",

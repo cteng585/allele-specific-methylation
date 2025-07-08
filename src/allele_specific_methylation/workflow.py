@@ -73,39 +73,50 @@ def combine_illumina_ont(
         "short_read_indel": None,
         "long_read": None,
     }
-    for key, vcf, rename_dict in zip(
+    for vcf_type, vcf, config_rename_dict in zip(
         reheadered_vcfs.keys(),
         [snv_minus_indel_vcf, indel_vcf, long_read_minus_indel_vcf],
         [snv_fn_rename, indel_fn_rename, long_read_fn_rename], strict=False,
     ):
-        if rename_dict is not None:
-            reheadered_vcf = read_vcf(reheader(vcf.path, rename_dict))
+        # adjust the renaming dictionary to match the names of samples that are actually in the VCF
+        vcf_rename_dict = {}
+        for rename_pattern in config_rename_dict:
+            for sample in vcf.header.samples:
+                if re.search(rename_pattern, sample, re.IGNORECASE):
+                    if sample in vcf_rename_dict:
+                        msg = (
+                            f"Sample {sample} matches multiple patterns in the renaming dictionary, "
+                        )
+                        raise KeyError(msg)
+                    else:
+                        vcf_rename_dict[sample] = config_rename_dict[rename_pattern]
+
+        if vcf_rename_dict:
+            reheadered_vcf = read_vcf(reheader(vcf.path, vcf_rename_dict))
             if os_file(reheadered_vcf.path) == "VCF":
                 reheadered_vcf.path = compress(reheadered_vcf.path, overwrite=True)
                 index(reheadered_vcf.path)
-            reheadered_vcfs[key] = reheadered_vcf
+            reheadered_vcfs[vcf_type] = reheadered_vcf
             tmp_cleanup.append(reheadered_vcf.path)
             tmp_cleanup.append(reheadered_vcf.path.with_suffix(".gz.csi"))
 
-        else:
-            reheadered_vcfs[key] = vcf
+        elif os_file(vcf.path) != "BGZF":
+            reheadered_vcfs[vcf_type] = VCF(vcf.data, header=vcf.header)
+            reheadered_vcfs[vcf_type].path = compress(reheadered_vcfs[vcf_type].path, overwrite=True)
+            index(reheadered_vcfs[vcf_type].path)
+            tmp_cleanup.append(reheadered_vcfs[vcf_type].path)
+            tmp_cleanup.append(reheadered_vcfs[vcf_type].path.with_suffix(".gz.csi"))
 
-        match key:
+        else:
+            reheadered_vcfs[vcf_type] = vcf
+
+        match vcf_type:
             case "short_read_snv":
-                snv_minus_indel_vcf = (
-                    reheadered_vcfs[key] if reheadered_vcfs[key] is not None
-                    else snv_minus_indel_vcf
-                )
+                snv_minus_indel_vcf = reheadered_vcfs[vcf_type]
             case "short_read_indel":
-                indel_vcf = (
-                    reheadered_vcfs[key] if reheadered_vcfs[key] is not None
-                    else indel_vcf
-                )
+                indel_vcf = reheadered_vcfs[vcf_type]
             case "long_read":
-                long_read_minus_indel_vcf = (
-                    reheadered_vcfs[key] if not None
-                    else long_read_minus_indel_vcf
-                )
+                long_read_minus_indel_vcf = reheadered_vcfs[vcf_type]
 
     # concatenating the SNV and indel VCFs
     snv_indel_fn = tempfile.NamedTemporaryFile(delete=False, suffix=".snv.indel.tmp.vcf.gz")
@@ -263,6 +274,7 @@ def combine_illumina_ont(
 
     with open(Path(output_fn).parent / "tempfiles.txt", "w") as outfile:
         for tmp_file in tmp_cleanup:
+            outfile.write(f"{tmp_file}\n")
             if Path(tmp_file).exists():
                 os.remove(tmp_file)
     merged_vcf.write(output_fn)
