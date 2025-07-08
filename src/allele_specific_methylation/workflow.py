@@ -128,9 +128,9 @@ def combine_illumina_ont(
         "long_read_sample": subset(long_read_minus_indel_vcf.path, samples=tumor_name),
     }
     for key, vcf_fn in subset_vcfs.items():
-        tmp_cleanup.append(vcf_fn)
         if vcf_fn is not None:
             subset_vcfs[key] = read_vcf(vcf_fn)
+            tmp_cleanup.append(vcf_fn)
             tmp_cleanup.append(Path(vcf_fn).with_suffix(".gz.csi"))
 
     # concatenating the long read and short read VCFs
