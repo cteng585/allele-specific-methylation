@@ -202,6 +202,8 @@ def subset(vcf_fn: str | Path, samples: str | list[str], output_fn: str | Path |
         subprocess.run(args, check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
         if "subset called for sample that does not exist in header" in e.stderr.decode("utf-8"):
+            # need to clean up the tempfile that was created by wasn't needed
+            os.remove(output_fn)
             return None
         msg = f"bcftools returned error: {e.stderr.decode('utf-8')}"
         raise ValueError(msg)
