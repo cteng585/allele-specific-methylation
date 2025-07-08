@@ -82,9 +82,10 @@ def combine_illumina_ont(
             reheadered_vcf = read_vcf(reheader(vcf.path, rename_dict))
             if os_file(reheadered_vcf.path) == "VCF":
                 reheadered_vcf.path = compress(reheadered_vcf.path, overwrite=True)
-                tmp_cleanup.append(index(reheadered_vcf.path))
-                tmp_cleanup.append(reheadered_vcf.path)
+                index(reheadered_vcf.path)
             reheadered_vcfs[key] = reheadered_vcf
+            tmp_cleanup.append(reheadered_vcf.path)
+            tmp_cleanup.append(reheadered_vcf.path.with_suffix(".gz.csi"))
 
         else:
             reheadered_vcfs[key] = vcf
@@ -116,6 +117,7 @@ def combine_illumina_ont(
         ),
     )
     tmp_cleanup.append(snv_indel_vcf.path)
+    tmp_cleanup.append(snv_indel_vcf.path.with_suffix(".gz.csi"))
 
     # subset to the samples of interest combined across all VCFs
     # subset returns None if the sample is not found in the VCF
@@ -126,8 +128,10 @@ def combine_illumina_ont(
         "long_read_sample": subset(long_read_minus_indel_vcf.path, samples=tumor_name),
     }
     for key, vcf_fn in subset_vcfs.items():
+        tmp_cleanup.append(vcf_fn)
         if vcf_fn is not None:
             subset_vcfs[key] = read_vcf(vcf_fn)
+            tmp_cleanup.append(Path(vcf_fn).with_suffix(".gz.csi"))
 
     # concatenating the long read and short read VCFs
     for vcf_type, subset_short_read, subset_long_read in zip(
@@ -147,6 +151,7 @@ def combine_illumina_ont(
                 ),
             )
             tmp_cleanup.append(concat_vcf.path)
+            tmp_cleanup.append(concat_vcf.path.with_suffix(".gz.csi"))
 
         elif subset_short_read is not None and subset_long_read is None:
             concat_vcf = subset_short_read
@@ -256,9 +261,10 @@ def combine_illumina_ont(
     else:
         raise ValueError("Samples to be merged did not exist in enough VCF files to merge.")
 
-    for tmp_file in tmp_cleanup:
-        if Path(tmp_file).exists():
-            os.remove(tmp_file)
+    with open(Path(output_fn).parent / "tempfiles.txt", "w") as outfile:
+        for tmp_file in tmp_cleanup:
+            if Path(tmp_file).exists():
+                os.remove(tmp_file)
     merged_vcf.write(output_fn)
 
 
