@@ -45,14 +45,6 @@ class VCF:
 
     def __post_init__(self):
         if self.__bcf:
-            if re.search(r"\.tmp\.", str(self.__bcf.filename.decode())):
-                msg = (
-                    "The substring '.tmp.' was found in the BCF filename. This substring is reserved for temporary "
-                    "files. Renaming the BCF file to not include this substring is recommended to avoid erroneous "
-                    "file deletion on garbage collection."
-                )
-                warnings.warn(msg, category=UserWarning)
-
             self.__header = self.__bcf.header
             try:
                 self.samples = str(self.__bcf.header).splitlines()[-1].split("\t")[9:]
@@ -62,14 +54,6 @@ class VCF:
             self.path = Path(self.__bcf.filename.decode()) if not self.path else self.path
 
         elif self.path:
-            if re.search(r"\.tmp\.", str(self.path)):
-                msg = (
-                    "The substring '.tmp.' was found in the BCF filename. This substring is reserved for temporary "
-                    "files. Renaming the BCF file to not include this substring is recommended to avoid erroneous "
-                    "file deletion on garbage collection."
-                )
-                warnings.warn(msg, category=UserWarning)
-
             self.__bcf = pysam.VariantFile(self.path)
             try:
                 self.samples = str(self.__bcf.header).splitlines()[-1].split("\t")[9:]
@@ -184,14 +168,6 @@ class VCF:
 
         if self.__has_tempfiles:
             self.__associated_files.append(self.path)
-            warnings.warn(
-                category=UserWarning,
-                message=(
-                    f"The underlying VCF file for this VCF object is temporary. Setting a path "
-                    f"for this object will not persist and there will be an attempt to clean up "
-                    f"the new path {self.path} on garbage collection."
-                ),
-            )
 
     @property
     def normal_id(self):

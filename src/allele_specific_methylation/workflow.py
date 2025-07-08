@@ -248,10 +248,12 @@ def combine_illumina_ont(
         subset_vcfs["deduplicated_normal_concat"] is not None and
         subset_vcfs["deduplicated_tumor_concat"] is not None
     ):
+        merged_output = tempfile.NamedTemporaryFile(delete=False, suffix=".merged.tmp.vcf.gz")
+        merged_output.close()
         merged_vcf = read_vcf(
             merge(
                 [subset_vcfs["deduplicated_normal_concat"].path, subset_vcfs["deduplicated_tumor_concat"].path],
-                output="merged.vcf",
+                output=merged_output.name,
             ),
         )
         tmp_cleanup.append(merged_vcf.path)
