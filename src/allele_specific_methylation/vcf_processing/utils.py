@@ -255,27 +255,32 @@ def os_file(fn: str | Path) -> str:
     :return: the file type as a string
     """
     try:
+        bcftools_args = ["bcftools", "view", "--header", fn]
+        bcftools_output = subprocess.run(bcftools_args, capture_output=True)
+    except subprocess.CalledProcessError as e:
+        msg = f"Error running 'bcftools view' on {fn}: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg) from e
+
+    try:
+        head_args = ["head", "-n", "1"]
+        head_output = subprocess.run(
+            head_args, input=bcftools_output.stdout, capture_output=True
+        )
+    except subprocess.CalledProcessError as e:
+        msg = f"Error running 'head' command on {fn}: {e.stderr.decode('utf-8')}"
+        raise ValueError(msg) from e
+
+    try:
         os_file_output = subprocess.run(["file", fn], check=True, capture_output=True)
     except subprocess.CalledProcessError as e:
         msg = f"Error running 'file' command on {fn}: {e.stderr.decode('utf-8')}"
         raise ValueError(msg) from e
 
-    stdout = os_file_output.stdout.decode("utf-8").strip()
-    file_type_patterns = re.compile(
-        r"(?P<BGZF>Blocked GNU Zip Format \(BGZF; gzip compatible\))|"
-        r"(?P<VCF>Variant Call Format \(VCF\))",
-    )
-
-    matched_file_types = [
-        group.lastgroup for group in file_type_patterns.finditer(stdout)
-    ]
-
-    if len(matched_file_types) == 0:
+    if re.search(r"##fileformat=VCF", head_output.stdout.decode("utf-8")) is None:
         msg = f"File {fn} is not an expected file type for this workflow"
         raise ValueError(msg)
-    if len(matched_file_types) > 1:
-        msg = f"File {fn} matches multiple file types: {', '.join(matched_file_types)}"
-        raise ValueError(msg)
 
-    # Return the first matched file type, which should be the only one
-    return matched_file_types[0]
+    if re.search(r"gzip", os_file_output.stdout.decode("utf-8")):
+        return "BGZF"
+    else:
+        return "VCF"

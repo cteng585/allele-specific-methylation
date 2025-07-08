@@ -57,7 +57,7 @@ def filter_indels(
 
 @asm.command()
 @click.option("--out_dir", "out_dir", type=click.Path(exists=True), required=True)
-@click.option("--sample_id", "sample_id", type=str, default=None)
+@click.option("--sample_id", "sample_id", type=str, default=None, required=True)
 @click.option("--short_read_snv_fn", "short_read_snv_fn", type=click.Path(exists=True), default=None)
 @click.option("--short_read_indel_fn", "short_read_indel_fn", type=click.Path(exists=True), default=None)
 @click.option("--long_read_fn", "long_read_fn", type=click.Path(exists=True), default=None)
