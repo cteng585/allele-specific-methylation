@@ -1,4 +1,5 @@
 import json
+import os
 import re
 import tempfile
 import warnings
@@ -44,6 +45,7 @@ def combine_illumina_ont(
     snv_vcf = read_vcf(short_read_snv_fn)
     indel_vcf = read_vcf(short_read_indel_fn)
     long_read_vcf = read_vcf(long_read_fn)
+    tmp_cleanup = []
 
     # SNVs are often erroneously called an indel occurs at the same position
     # remove positions with indels from the SNV VCF and the long read data
@@ -53,6 +55,7 @@ def combine_illumina_ont(
         how="anti",
     )
     snv_minus_indel_vcf = VCF(snv_vcf.data, header=snv_vcf.header)
+    tmp_cleanup.append(snv_minus_indel_vcf.path)
 
     long_read_vcf.data = long_read_vcf.data.join(
         indel_vcf.data.select("CHROM", "POS"),
@@ -61,7 +64,8 @@ def combine_illumina_ont(
     )
     long_read_minus_indel_vcf = VCF(long_read_vcf.data, header=long_read_vcf.header)
     long_read_minus_indel_vcf.path = compress(long_read_minus_indel_vcf.path, overwrite=True)
-    index(long_read_minus_indel_vcf.path)
+    tmp_cleanup.append(index(long_read_minus_indel_vcf.path))
+    tmp_cleanup.append(long_read_minus_indel_vcf.path)
 
     # rename files as necessary
     reheadered_vcfs = {
@@ -78,7 +82,8 @@ def combine_illumina_ont(
             reheadered_vcf = read_vcf(reheader(vcf.path, rename_dict))
             if os_file(reheadered_vcf.path) == "VCF":
                 reheadered_vcf.path = compress(reheadered_vcf.path, overwrite=True)
-                index(reheadered_vcf.path)
+                tmp_cleanup.append(index(reheadered_vcf.path))
+                tmp_cleanup.append(reheadered_vcf.path)
             reheadered_vcfs[key] = reheadered_vcf
 
         else:
@@ -110,6 +115,7 @@ def combine_illumina_ont(
             snv_indel_fn.name,
         ),
     )
+    tmp_cleanup.append(snv_indel_vcf.path)
 
     # subset to the samples of interest combined across all VCFs
     # subset returns None if the sample is not found in the VCF
@@ -140,6 +146,7 @@ def combine_illumina_ont(
                     concat_vcf.name,
                 ),
             )
+            tmp_cleanup.append(concat_vcf.path)
 
         elif subset_short_read is not None and subset_long_read is None:
             concat_vcf = subset_short_read
@@ -213,9 +220,10 @@ def combine_illumina_ont(
 
             # all inputs for merge need to be compressed
             deduplicated_vcf.path = compress(deduplicated_vcf.path)
+            tmp_cleanup.append(deduplicated_vcf.path)
 
             # index the deduplicated VCF
-            index(deduplicated_vcf.path)
+            tmp_cleanup.append(index(deduplicated_vcf.path))
 
             subset_vcfs[f"deduplicated_{vcf_type}_concat"] = deduplicated_vcf
 
@@ -230,6 +238,8 @@ def combine_illumina_ont(
                 output="merged.vcf",
             ),
         )
+        tmp_cleanup.append(merged_vcf.path)
+        tmp_cleanup.append(merged_vcf.path.with_suffix(".gz.csi"))
     elif (
         subset_vcfs["deduplicated_normal_concat"] is not None and
         subset_vcfs["deduplicated_tumor_concat"] is None
@@ -246,6 +256,9 @@ def combine_illumina_ont(
     else:
         raise ValueError("Samples to be merged did not exist in enough VCF files to merge.")
 
+    for tmp_file in tmp_cleanup:
+        if Path(tmp_file).exists():
+            os.remove(tmp_file)
     merged_vcf.write(output_fn)
 
 
