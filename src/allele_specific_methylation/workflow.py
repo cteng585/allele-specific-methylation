@@ -597,3 +597,33 @@ def filter_hq_indels(
         output_fn = f"{output_stem}.indels_filtered.vcf.gz"
 
     return filtered_indels, output_fn
+
+
+def filter_genotyped_variants(
+    vcf_fn: str | Path,
+    overwrite: bool,
+):
+    """Filter out variants that do not have genotype information
+
+    :param vcf_fn: path to VCF file
+    :param overwrite: whether to overwrite the original VCF file or write to a new file
+    """
+    vcf = read_vcf(vcf_fn)
+    vcf.make_filter("GT")
+
+    has_gt = VCF(
+        data=vcf.data.join(
+            vcf.check_filters("GT").select("CHROM", "POS"),
+            on=["CHROM", "POS"],
+            how="left",
+        ),
+        header=vcf.header,
+    )
+
+    if overwrite:
+        has_gt.write(vcf_fn)
+    else:
+        file_suffixes = Path(vcf_fn).suffixes
+        output_stem = str(vcf_fn).removesuffix("".join(file_suffixes))
+        output_fn = f"{output_stem}.genotyped.vcf.gz"
+        has_gt.write(output_fn)

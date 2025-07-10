@@ -5,7 +5,7 @@ import click
 
 from allele_specific_methylation.bioapps import config as bioapps_config
 from allele_specific_methylation.parse import parse_combine_vcf_config
-from allele_specific_methylation.workflow import combine_illumina_ont, filter_hq_indels
+from allele_specific_methylation.workflow import combine_illumina_ont, filter_hq_indels, filter_genotyped_variants
 
 
 @click.group()
@@ -172,6 +172,24 @@ def make_bioapps_config(
         analysis_dir=analysis_dir,
         config_type=config_type,
         config_path=config_path,
+    )
+
+
+@asm.command()
+@click.argument("vcf_fn", type=click.Path(exists=True))
+@click.option(
+    "--overwrite",
+    is_flag=True,
+    default=False,
+    help="Overwrite existing VCF, only keeping genotyped variants"
+)
+def genotyped_variants(
+    vcf_fn: click.Path(exists=True),
+    overwrite: bool,
+):
+    filter_genotyped_variants(
+        vcf_fn=vcf_fn,
+        overwrite=overwrite
     )
 
 
