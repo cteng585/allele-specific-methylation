@@ -1,3 +1,7 @@
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
 [project]
 name = "allele-specific-methylation"
 version = "0.1.0"
@@ -7,6 +11,7 @@ requires-python = ">=3.12"
 dependencies = [
     "biopython>=1.85",
     "click>=8.2.1",
+    "hatchling>=1.27.0",
     "numpy>=2.2.4",
     "pandas>=2.2.3",
     "plotly>=6.0.1",
@@ -53,9 +58,8 @@ extend-ignore = [
     "TRY003",   # Do not suggest limit to exception message length
 ]
 
-[build-system]
-requires = ["setuptools>=61"]
-build-backend = "setuptools.build_meta"
+[tool.hatch.build.targets.wheel]
+packages = ["src/allele_specific_methylation"]
 
-[tool.setuptools]
-package-dir = {"" = "src"}
+[tool.hatch.build.targets.sdist]
+packages = ["src/allele_specific_methylation"]
