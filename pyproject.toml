@@ -29,6 +29,7 @@ dev = [
     "ipykernel>=6.29.5",
     "jupyter>=1.1.1",
     "ruff>=0.12.0",
+    "whatshap>=2.8",
 ]
 
 [project.scripts]
