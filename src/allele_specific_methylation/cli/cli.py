@@ -3,10 +3,6 @@ from typing import Optional
 
 import click
 
-from allele_specific_methylation.bioapps import config as bioapps_config
-from allele_specific_methylation.parse import parse_combine_vcf_config
-from allele_specific_methylation.workflow import combine_illumina_ont, filter_hq_indels, filter_genotyped_variants
-
 
 @click.group()
 def asm():
@@ -38,6 +34,8 @@ def filter_indels(
     :param overwrite: overwrite existing VCF files
     :return: None
     """
+    from allele_specific_methylation.workflow import filter_hq_indels
+
     indel_fn = Path(str(filename)) if filename else None
 
     # only one of sample metadata or config should be provided
@@ -78,6 +76,8 @@ def combine_vcfs(
     long_read_tumor_lib: str | None = None,
     config: str | Path | None = None,
 ):
+    from allele_specific_methylation.parse import parse_combine_vcf_config
+    from allele_specific_methylation.workflow import combine_illumina_ont
     NORMAL_NAME = "NORMAL"
     TUMOR_NAME = "TUMOR"
 
@@ -168,6 +168,8 @@ def make_bioapps_config(
     :param config_path: where to write the configuration file, defaults to 'config.yaml'
     :return:
     """
+    from allele_specific_methylation.bioapps import config as bioapps_config
+
     bioapps_config.generate_config(
         analysis_dir=analysis_dir,
         config_type=config_type,
@@ -187,6 +189,8 @@ def genotyped_variants(
     vcf_fn: click.Path(exists=True),
     overwrite: bool,
 ):
+    from allele_specific_methylation.workflow import filter_genotyped_variants
+
     filter_genotyped_variants(
         vcf_fn=vcf_fn,
         overwrite=overwrite
