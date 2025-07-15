@@ -4,6 +4,27 @@ from typing import Optional
 import click
 
 
+def _read_config(
+    config: str | Path,
+    sample_id: str | None,
+):
+    from allele_specific_methylation.parse import parse_combine_vcf_config
+
+    config = Path(config)
+    match config.suffix:
+        case ".yaml":
+            file_type = "yaml"
+        case ".json":
+            file_type = "json"
+        case _:
+            raise ValueError(f"Unsupported config file type: {config.suffix}")
+
+    sample_config = parse_combine_vcf_config(config, file_type=file_type).get(
+        sample_id
+    )
+    return sample_config
+
+
 @click.group()
 def asm():
     # TODO: check that bcftools is installed
@@ -76,24 +97,12 @@ def combine_vcfs(
     long_read_tumor_lib: str | None = None,
     config: str | Path | None = None,
 ):
-    from allele_specific_methylation.parse import parse_combine_vcf_config
     from allele_specific_methylation.workflow import combine_illumina_ont
     NORMAL_NAME = "NORMAL"
     TUMOR_NAME = "TUMOR"
 
     if config is not None:
-        config = Path(config)
-        match config.suffix:
-            case ".yaml":
-                file_type = "yaml"
-            case ".json":
-                file_type = "json"
-            case _:
-                raise ValueError(f"Unsupported config file type: {config.suffix}")
-
-        sample_config = parse_combine_vcf_config(config, file_type=file_type).get(
-            sample_id
-        )
+        sample_config = _read_config(config=config, sample_id=sample_id)
     else:
         short_read_rename = {
             library_id: library_type for library_id, library_type in zip(
@@ -195,6 +204,60 @@ def genotyped_variants(
         vcf_fn=vcf_fn,
         overwrite=overwrite
     )
+
+
+@asm.command()
+@click.option("--vcf_fn", "vcf_fn", type=click.Path(exists=True), required=True)
+@click.option("--old_vcf_fn", "old_vcf_fn", type=click.Path(exists=True), required=True)
+@click.option("--sample_id", "sample_id", type=str, required=True)
+@click.option("--sample_name", "sample_name", type=str, required=True)
+@click.option("--tumor_lib", "tumor_lib", type=str, default=None)
+@click.option("--config", "config", type=click.Path(exists=True), default=None)
+def map_phasing_space(
+    vcf_fn: click.Path(exists=True),
+    old_vcf_fn: click.Path(exists=True),
+    sample_id: str,
+    sample_name: str,
+    tumor_lib: str | None = None,
+    config: Optional[click.Path(exists=True)] = None,
+):
+    """Map phasing of variants in a VCF file to the phasing space of a previous VCF file
+
+    Since the phasing of heterozygous variants is arbitrary between haplotypes that are in different phase blocks
+    (i.e. haplotype 1 in phase block A might be haplotype 2 in phase block B), it's necessary to map the phasing of
+    variants in a new VCF file to the phasing space of a previous VCF file if that previous VCF file was used to
+    conduct downstream analyses that depend on the phasing of variants
+
+    :param vcf_fn: the path to the VCF file with new phasing information
+    :param old_vcf_fn: the path to the VCF file with the original phasing information
+    :param sample_id: the sample ID for which the phasing is being mapped
+    :param sample_name: the type of sample of the library, (should be "TUMOR" or "NORMAL")
+    :param tumor_lib: the library ID of the tumor sample, used to rename the VCF file
+    :param config: a configuration file containing the library IDs and their corresponding sample names. generated
+        using the `make_bioapps_config` command. If provided, the library IDs in the VCF file will be renamed
+    :return:
+    """
+    from allele_specific_methylation.workflow import map_phasing
+    from allele_specific_methylation.vcf_processing.utils import reheader
+
+    if config is not None:
+        sample_config = _read_config(config=config, sample_id=sample_id)
+        rename_dict = sample_config["long_read"]["libraries"]
+
+    else:
+        rename_dict = {tumor_lib: sample_name}
+
+    output_fn = Path(vcf_fn).parent / f"{sample_id}.mapped_phasing.vcf.gz"
+
+    fixed_phasing_vcf = map_phasing(
+        original_phased_fn=reheader(
+            old_vcf_fn,
+            rename_dict=rename_dict,
+        ),
+        new_phased_fn=vcf_fn,
+        sample_name=sample_name,
+    )
+    fixed_phasing_vcf.write(output_fn)
 
 
 if __name__ == "__main__":
