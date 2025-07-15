@@ -242,7 +242,7 @@ def map_phasing_space(
 
     if config is not None:
         sample_config = _read_config(config=config, sample_id=sample_id)
-        rename_dict = sample_config["long_read"]["libraries"]
+        rename_dict = sample_config["long_read"]["rename"]
 
     else:
         rename_dict = {tumor_lib: sample_name}
