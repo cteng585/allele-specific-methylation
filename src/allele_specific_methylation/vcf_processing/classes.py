@@ -211,27 +211,28 @@ class VCF:
 
         return self.data.filter((pl.col("CHROM") == chrom) & (pl.col("POS") == pos))
 
-    def make_filter(self, field_name):
-        if field_name in self.filters:
-            return
+    def make_filters(self, *field_names):
+        for field_name in field_names:
+            if field_name in self.filters:
+                continue
 
-        filter_table = (
-            self.data.select(["CHROM", "POS", "FORMAT", *self.samples])
-            .with_columns(pl.col("FORMAT").str.split(":"))
-            .filter(pl.col("FORMAT").list.contains(field_name))
-            .with_columns(
-                pl.col("FORMAT")
-                .map_elements(
-                    lambda s: list(s).index(field_name),
-                    return_dtype=pl.Int8,
+            filter_table = (
+                self.data.select(["CHROM", "POS", "FORMAT", *self.samples])
+                .with_columns(pl.col("FORMAT").str.split(":"))
+                .filter(pl.col("FORMAT").list.contains(field_name))
+                .with_columns(
+                    pl.col("FORMAT")
+                    .map_elements(
+                        lambda s: list(s).index(field_name),
+                        return_dtype=pl.Int8,
+                    )
+                    .alias(f"{field_name}_idx"),
                 )
-                .alias(f"{field_name}_idx"),
+                .with_columns(pl.col(*self.samples).str.split(":").list.get(pl.col(f"{field_name}_idx")))
+                .filter(~pl.all_horizontal(pl.col(*self.samples) == "."))
             )
-            .with_columns(pl.col(*self.samples).str.split(":").list.get(pl.col(f"{field_name}_idx")))
-            .filter(~pl.all_horizontal(pl.col(*self.samples) == "."))
-        )
 
-        self.__filters[field_name] = filter_table
+            self.__filters[field_name] = filter_table
 
     def filter(self, **kwargs):
         filter_table = pl.DataFrame()
@@ -244,7 +245,7 @@ class VCF:
                     ),
                     category=UserWarning,
                 )
-                self.make_filter(filter_name)
+                self.make_filters(filter_name)
 
             if filter_table.is_empty():
                 filter_table = self.__filters[filter_name].filter(expression)

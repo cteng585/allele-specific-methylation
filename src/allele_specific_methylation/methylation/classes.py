@@ -117,7 +117,7 @@ class PhasedVariants:
     def __load_phased_variants(self, vcf):
         for required_filter in ["GT", "PS"]:
             if required_filter not in vcf.filters:
-                vcf.make_filter(required_filter)
+                vcf.make_filters(required_filter)
 
         for sample in vcf.samples:
             # get the genotypes per variant for `sample`

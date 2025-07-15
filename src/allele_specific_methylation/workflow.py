@@ -182,7 +182,7 @@ def combine_illumina_ont(
             continue
 
         # make a filter for the genotype info
-        concat_vcf.make_filter("GT")
+        concat_vcf.make_filters("GT")
 
         # find the variants that are duplicated in the data set by finding combinations of CHROM/POS
         # that are duplicated
@@ -517,7 +517,7 @@ def filter_hq_indels(
         raise ValueError(msg)
 
     indel_vcf = read_vcf(indel_fn)
-    indel_vcf.make_filter("GT")
+    indel_vcf.make_filters("GT")
 
     # we do not expect strelka to call genotypes for variants. if there are any
     # strelka called genotypes, then this is an error
@@ -609,7 +609,7 @@ def filter_genotyped_variants(
     :param overwrite: whether to overwrite the original VCF file or write to a new file
     """
     vcf = read_vcf(vcf_fn)
-    vcf.make_filter("GT")
+    vcf.make_filters("GT")
 
     has_gt = VCF(
         data=vcf.data.join(
