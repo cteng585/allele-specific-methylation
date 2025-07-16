@@ -709,14 +709,20 @@ def find_dmr_distances(
             concat_vcf = Path(
                 snv_vcf_config=sample_configs[participant_id]["short_read_snv"]["path"]
             ).parent / f"{participant_id}.somatic.vcf.gz"
+            concat_vcf = read_vcf(
+                concat(
+                    [snv_vcf_subset_fn, indel_vcf_subset_fn],
+                    concat_vcf,
+                )
+            )
         else:
             concat_vcf = tempfile.NamedTemporaryFile(delete=False)
-        concat_vcf = read_vcf(
-            concat(
-                [snv_vcf_subset_fn, indel_vcf_subset_fn],
-                concat_vcf.name,
+            concat_vcf = read_vcf(
+                concat(
+                    [snv_vcf_subset_fn, indel_vcf_subset_fn],
+                    concat_vcf.name,
+                )
             )
-        )
         return concat_vcf
 
     # load processing metadata
