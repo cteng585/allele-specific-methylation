@@ -729,14 +729,14 @@ def find_dmr_distances(
     # make analysis objects for each sample that has a defined aDMR for the gene
     aDM_samples = {}
     for participant_id in aDM_ids:
-        fixed_phasing_vcf = Path(
+        fixed_phasing_vcf_fn = Path(
             sample_configs[participant_id]["long_read"]["path"]
         ).parent / f"{participant_id}.mapped_phasing.vcf.gz"
 
-        if fixed_phasing_vcf.exists():
+        if fixed_phasing_vcf_fn.exists():
             aDM_ids[participant_id] = DMRSample(
                 participant_id,
-                Path("../data/scp/POG615/POG615.mapped_phasing.vcf.gz")
+                fixed_phasing_vcf_fn,
             )
         else:
             msg = (
