@@ -286,6 +286,7 @@ def map_phasing(
     original_phased_fn: str | Path,
     new_phased_fn: str | Path,
     sample_name: str,
+    rename_dict: dict | None,
 ) -> VCF:
     """Map the phasing of variants in `new_phased_fn` to the phasing of variants in `original_phased_fn`
 
@@ -296,6 +297,7 @@ def map_phasing(
     :param original_phased_fn: the original phased VCF file to map the phasing to
     :param new_phased_fn: the new phased VCF file to map the phasing from
     :param sample_name: the sample name to map the phasing for
+    :param rename_dict: a dictionary for renaming the sample names in the VCF files
     :return:
     """
     # this should also resolve the variant records themselves, not just the dataframe
@@ -310,9 +312,32 @@ def map_phasing(
         return [format_string, data_string]
 
     original_vcf = read_vcf(original_phased_fn)
-    original_phased = PhasedVariants(original_vcf)
-
     new_vcf = read_vcf(new_phased_fn)
+
+    # adjust renaming to be flexible with sample names
+    if rename_dict:
+        for idx, vcf in enumerate([original_vcf, new_vcf]):
+            vcf_rename_dict = {}
+            for rename_pattern in rename_dict:
+                for sample in vcf.header.samples:
+                    if re.search(rename_pattern, sample, re.IGNORECASE):
+                        if sample in vcf_rename_dict:
+                            msg = (
+                                f"Sample {sample} matches multiple patterns in the renaming dictionary, "
+                            )
+                            raise KeyError(msg)
+                        else:
+                            vcf_rename_dict[sample] = rename_dict[rename_pattern]
+
+            match idx:
+                case 0:
+                    if vcf_rename_dict:
+                        original_vcf = read_vcf(reheader(original_vcf.path, vcf_rename_dict))
+                case 1:
+                    if vcf_rename_dict:
+                        new_vcf = read_vcf(reheader(new_vcf.path, vcf_rename_dict))
+
+    original_phased = PhasedVariants(original_vcf)
     new_phased = PhasedVariants(new_vcf)
 
     # first get the coordinates that are shared between the newly phased data and

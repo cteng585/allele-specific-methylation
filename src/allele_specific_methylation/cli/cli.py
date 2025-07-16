@@ -238,7 +238,6 @@ def map_phasing_space(
     :return:
     """
     from allele_specific_methylation.workflow import map_phasing
-    from allele_specific_methylation.vcf_processing.utils import reheader
 
     if config is not None:
         sample_config = _read_config(config=config, sample_id=sample_id)
@@ -250,12 +249,10 @@ def map_phasing_space(
     output_fn = Path(vcf_fn).parent / f"{sample_id}.mapped_phasing.vcf.gz"
 
     fixed_phasing_vcf = map_phasing(
-        original_phased_fn=reheader(
-            old_vcf_fn,
-            rename_dict=rename_dict,
-        ),
+        original_phased_fn=old_vcf_fn,
         new_phased_fn=vcf_fn,
         sample_name=sample_name,
+        rename_dict=rename_dict,
     )
     fixed_phasing_vcf.write(output_fn)
 
