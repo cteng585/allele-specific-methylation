@@ -9,7 +9,7 @@ import polars as pl
 import pysam
 import yaml
 
-from allele_specific_methylation.methylation.classes import PhasedVariants
+from allele_specific_methylation.methylation.classes import DMRSample, PhasedVariants
 from allele_specific_methylation.methylation.utils import hamming
 
 from allele_specific_methylation.vcf_processing.classes import VCF
@@ -652,3 +652,118 @@ def filter_genotyped_variants(
         output_stem = str(vcf_fn).removesuffix("".join(file_suffixes))
         output_fn = f"{output_stem}.genotyped.vcf.gz"
         has_gt.write(output_fn)
+
+
+def find_dmr_distances(
+    gene_name: str,
+    sample_name: str,
+    sample_configs: dict,
+    aDM_metadata_fn: str | Path,
+    gene_dmr_fn: str | Path,
+    output_fn: str | Path,
+):
+
+    def _make_somatic_vcf(sample_id: str, sample_name: str, sample_configs: dict):
+        snv_vcf_config = sample_configs[sample_id]["short_read_snv"]
+        indel_vcf_config = sample_configs[sample_id]["short_read_indel"]
+
+        for vcf_type, vcf_config in zip(
+            ["snv", "indel"],
+            [snv_vcf_config, indel_vcf_config],
+        ):
+            if vcf_config is None:
+                raise ValueError(f"Sample {sample_id} does not have {vcf_type} VCFs configured.")
+
+            vcf = read_vcf(vcf_config["path"])
+
+            if vcf_config["rename"]:
+                vcf_rename_dict = {}
+                for rename_pattern in vcf_config["rename"]:
+                    for sample in vcf.header.samples:
+                        if re.search(rename_pattern, sample, re.IGNORECASE):
+                            if sample in vcf_rename_dict:
+                                msg = (
+                                    f"Sample {sample} matches multiple patterns in the renaming dictionary, "
+                                )
+                                raise KeyError(msg)
+                            else:
+                                vcf_rename_dict[sample] = vcf_config["rename"][rename_pattern]
+
+                if vcf_rename_dict:
+                    vcf = read_vcf(
+                        compress(reheader(vcf.path, vcf_rename_dict))
+                    )
+
+            if vcf.path.suffix != ".gz":
+                vcf = VCF(vcf.data, header=vcf.header)
+                vcf = read_vcf(compress(vcf.path))
+
+            match vcf_type:
+                case "snv":
+                    snv_vcf_subset_fn = subset(vcf.path, samples=sample_name)
+                case "indel":
+                    indel_vcf_subset_fn = subset(vcf.path, samples=sample_name)
+
+        concat_vcf = tempfile.NamedTemporaryFile(delete=False)
+        concat_vcf = read_vcf(
+            concat(
+                [snv_vcf_subset_fn, indel_vcf_subset_fn],
+                concat_vcf.name,
+            )
+        )
+
+        return concat_vcf
+
+    # load processing metadata
+    gene_dmr = pl.read_csv(gene_dmr_fn, separator="\t")
+    aDM_metadata = pl.read_csv(aDM_metadata_fn, separator="\t")
+
+    # get patient sample IDs that have aDMRs for the gene
+    aDM_ids = aDM_metadata.filter(
+        pl.col("gene") == gene_name
+    ).select(
+        pl.col("pogs_w_aDMs")
+    ).row(0)
+    aDM_ids = [participant_id.split("-")[0].strip() for participant_id in aDM_ids[0].split(",")]
+
+    # make analysis objects for each sample that has a defined aDMR for the gene
+    aDM_samples = {
+        participant_id: DMRSample(
+            participant_id,
+            Path("../data/scp/POG615/POG615.mapped_phasing.vcf.gz")
+        ) for participant_id in aDM_ids
+    }
+
+    # for each sample and each associated aDMR, find the closest somatic variants (cis and trans to
+    # the methylated allele)
+    for sample_id in aDM_samples:
+        somatic_vcf = _make_somatic_vcf(
+            sample_id,
+            sample_name,
+            sample_configs,
+        )
+
+        aDM_samples[sample_id].label_variants(sample_name, somatic_vcf)
+        aDM_samples[sample_id].find_gene_dmrs(gene_dmr)
+        aDM_samples[sample_id].find_closest_variants(sample_name)
+
+    # write the closest variant distances to a DataFrame
+    dmr_distances = pl.DataFrame()
+    for sample_id in aDM_samples:
+        for dmr_variant in aDM_samples[sample_id].closest_dmr_variant:
+            dmr_distances = dmr_distances.vstack(
+                pl.DataFrame({
+                    "sample_id": sample_id,
+                    "variant_type": dmr_variant["variant_type"],
+                    "chrom": dmr_variant["chrom"],
+                    "pos": dmr_variant["pos"],
+                    "dmr_start": dmr_variant["dmr_start"],
+                    "dmr_end": dmr_variant["dmr_end"],
+                    "distance_to_DMR": dmr_variant["distance_to_DMR"],
+                })
+            )
+    dmr_distances.write_csv(
+        output_fn,
+        include_header=True,
+        separator="\t",
+    )

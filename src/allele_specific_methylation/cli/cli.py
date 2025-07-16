@@ -257,5 +257,74 @@ def map_phasing_space(
     fixed_phasing_vcf.write(output_fn)
 
 
+@asm.command()
+@click.option(
+    "--gene_name",
+    "gene_name",
+    type=str,
+    required=True,
+    help="The name of the gene to analyze DMRs for"
+)
+@click.option(
+    "--sample_name",
+    "sample_name",
+    type=str,
+    required=True,
+    help="The name of the sample to analyze DMRs for (e.g. 'TUMOR')"
+)
+@click.option(
+    "--config",
+    "config",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the configuration file containing the sample metadata and library IDs"
+)
+@click.option(
+    "--aDM_metadata",
+    "aDM_metadata_fn",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the aDM metadata file containing information about the DMRs"
+)
+@click.option(
+    "--gene_dmr",
+    "gene_dmr_fn",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the gene DMR file containing information about the DMRs for the gene"
+)
+@click.option(
+    "--output",
+    "output_fn",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the directory where the DMR distances will be saved"
+)
+def dmr_distances(
+    gene_name: str,
+    sample_name: str,
+    config: click.Path(exists=True),
+    aDM_metadata_fn: click.Path(exists=True),
+    gene_dmr_fn: click.Path(exists=True),
+    output_fn: click.Path(),
+):
+    from allele_specific_methylation.workflow import find_dmr_distances
+    from allele_specific_methylation.parse import parse_combine_vcf_config
+
+    sample_configs = parse_combine_vcf_config(
+        config_fn=config,
+        file_type=Path(config).suffixes[-1],
+    )
+
+    find_dmr_distances(
+        gene_name=gene_name,
+        sample_name=sample_name,
+        sample_configs=sample_configs,
+        aDM_metadata_fn=aDM_metadata_fn,
+        gene_dmr_fn=gene_dmr_fn,
+        output_fn=output_fn,
+    )
+
+
 if __name__ == "__main__":
     asm()

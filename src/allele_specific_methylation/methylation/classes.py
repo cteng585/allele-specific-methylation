@@ -1,8 +1,10 @@
 import re
+from pathlib import Path
 
 import polars as pl
 
 from allele_specific_methylation.vcf_processing.classes import VCF
+from allele_specific_methylation.vcf_processing.parse import read_vcf
 
 
 class GenomeCoord:
@@ -169,6 +171,113 @@ class PhasedVariants:
                 how="inner",
             )
 
-
     def pos(self, coordinates: str):
         return self.__vcf.pos(coordinates)
+
+
+class DMRSample:
+    def __init__(
+        self,
+        sample_id: str,
+        phased_vcf_fn: str | Path,
+    ):
+        self.sample_id: str = sample_id
+        self.phased_variants: VCF = PhasedVariants(read_vcf(phased_vcf_fn))
+        self.dmrs: list[DMR] = []
+        self.closest_dmr_variant: list[dict] = []
+
+    def find_gene_dmrs(self, gene_dmr: pl.DataFrame):
+        """
+        Find DMRs associated with the gene in the sample's VCF.
+        """
+        for row in (
+            gene_dmr
+                .filter(pl.col("POGID").str.contains(self.sample_id))
+                .select("chr", "start", "end", "nCG", "meanMethy1", "meanMethy2")
+        ).rows():
+            self.dmrs.append(
+                DMR(*row)
+            )
+
+    def label_variants(self, sample_name: str, somatic_variants: VCF):
+        self.phased_variants.data[sample_name] = self.phased_variants.data[sample_name].join(
+            somatic_variants.data.select("CHROM", "POS").with_columns(
+                pl.lit("somatic").alias("variant_type")
+            ),
+            how="left",
+            on=["CHROM", "POS"],
+        ).with_columns(
+            pl.col("variant_type").fill_null("germline")
+        )
+
+    def find_closest_variants(self, sample_name: str):
+        for idx, dmr in enumerate(self.dmrs):
+            somatic_variant_distances = (
+                self.phased_variants.data[sample_name]
+
+                # remove positions that are homozygous variants since if the variant is on both alleles but the region is differentially methylated, it's unlikely that the variant is what's responsible for the methylation difference
+                .filter(
+                    (pl.struct(["HP1", "HP2"]) != {"HP1": 1, "HP2": 1})
+                )
+
+                .filter(
+                    (pl.col("CHROM") == dmr.chrom) &
+                    (pl.col("variant_type") == "somatic")
+                )
+
+                .with_columns(
+                    pl.when(pl.col(dmr.methylated) == 1).then(
+                        pl.lit("cis to methylation")
+                    ).otherwise(
+                        pl.lit("trans to methylation")
+                    ).alias(f"DMR_relationship"),
+                    pl.min_horizontal(
+                        abs(pl.col("POS") - dmr.start),
+                        abs(pl.col("POS") - dmr.end)
+                    ).alias("distance_to_DMR")
+                )
+            )
+            somatic_variant_distances = somatic_variant_distances.group_by(
+                "DMR_relationship"
+            ).agg(
+                pl.min("distance_to_DMR"),
+            ).join(
+                somatic_variant_distances.select(
+                    "CHROM", "POS", "distance_to_DMR"
+                ),
+                on=["distance_to_DMR"],
+                how="inner",
+            ).select(
+                "CHROM", "POS", "DMR_relationship", "distance_to_DMR"
+            )
+
+            cis_variant = somatic_variant_distances.filter(
+                pl.col("DMR_relationship") == "cis to methylation"
+            ).row(0)
+            trans_variant = somatic_variant_distances.filter(
+                pl.col("DMR_relationship") == "trans to methylation"
+            ).row(0)
+
+            # add the closest cis variant
+            self.closest_dmr_variant.append(
+                {
+                    "variant_type": "cis_variant",
+                    "chrom": cis_variant[0],
+                    "pos": cis_variant[1],
+                    "dmr_start": dmr.start,
+                    "dmr_end": dmr.end,
+                    "distance_to_DMR": cis_variant[3],
+                }
+            )
+
+            # add the closest trans variant
+            self.closest_dmr_variant.append(
+                {
+                    "variant_type": "trans_variant",
+                    "chrom": trans_variant[0],
+                    "pos": trans_variant[1],
+                    "dmr_start": dmr.start,
+                    "dmr_end": dmr.end,
+                    "distance_to_DMR": trans_variant[3],
+                }
+            )
