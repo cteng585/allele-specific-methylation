@@ -663,16 +663,16 @@ def find_dmr_distances(
     output_fn: str | Path,
 ):
 
-    def _make_somatic_vcf(sample_id: str, sample_name: str, sample_configs: dict):
-        snv_vcf_config = sample_configs[sample_id]["short_read_snv"]
-        indel_vcf_config = sample_configs[sample_id]["short_read_indel"]
+    def _make_somatic_vcf(participant_id: str, sample_name: str, sample_configs: dict):
+        snv_vcf_config = sample_configs[participant_id]["short_read_snv"]
+        indel_vcf_config = sample_configs[participant_id]["short_read_indel"]
 
         for vcf_type, vcf_config in zip(
             ["snv", "indel"],
             [snv_vcf_config, indel_vcf_config],
         ):
             if vcf_config is None:
-                raise ValueError(f"Sample {sample_id} does not have {vcf_type} VCFs configured.")
+                raise ValueError(f"Sample {participant_id} does not have {vcf_type} VCFs configured.")
 
             vcf = read_vcf(vcf_config["path"])
 
@@ -727,33 +727,44 @@ def find_dmr_distances(
     aDM_ids = [participant_id.split("-")[0].strip() for participant_id in aDM_ids[0].split(",")]
 
     # make analysis objects for each sample that has a defined aDMR for the gene
-    aDM_samples = {
-        participant_id: DMRSample(
-            participant_id,
-            Path("../data/scp/POG615/POG615.mapped_phasing.vcf.gz")
-        ) for participant_id in aDM_ids
-    }
+    aDM_samples = {}
+    for participant_id in aDM_ids:
+        fixed_phasing_vcf = Path(
+            sample_configs[participant_id]["long_read_snv"]["path"]
+        ).parent / f"{participant_id}.mapped_phasing.vcf.gz"
+
+        if fixed_phasing_vcf.exists():
+            aDM_ids[participant_id] = DMRSample(
+                participant_id,
+                Path("../data/scp/POG615/POG615.mapped_phasing.vcf.gz")
+            )
+        else:
+            msg = (
+                f"No fixed phasing VCF found for sample {participant_id}. "
+                f"Skipping DMR distance calculation for this sample."
+            )
+            warnings.warn(msg, category=RuntimeWarning)
 
     # for each sample and each associated aDMR, find the closest somatic variants (cis and trans to
     # the methylated allele)
-    for sample_id in aDM_samples:
+    for participant_id in aDM_samples:
         somatic_vcf = _make_somatic_vcf(
-            sample_id,
+            participant_id,
             sample_name,
             sample_configs,
         )
 
-        aDM_samples[sample_id].label_variants(sample_name, somatic_vcf)
-        aDM_samples[sample_id].find_gene_dmrs(gene_dmr)
-        aDM_samples[sample_id].find_closest_variants(sample_name)
+        aDM_samples[participant_id].label_variants(sample_name, somatic_vcf)
+        aDM_samples[participant_id].find_gene_dmrs(gene_dmr)
+        aDM_samples[participant_id].find_closest_variants(sample_name)
 
     # write the closest variant distances to a DataFrame
     dmr_distances = pl.DataFrame()
-    for sample_id in aDM_samples:
-        for dmr_variant in aDM_samples[sample_id].closest_dmr_variant:
+    for participant_id in aDM_samples:
+        for dmr_variant in aDM_samples[participant_id].closest_dmr_variant:
             dmr_distances = dmr_distances.vstack(
                 pl.DataFrame({
-                    "sample_id": sample_id,
+                    "participant_id": participant_id,
                     "variant_type": dmr_variant["variant_type"],
                     "chrom": dmr_variant["chrom"],
                     "pos": dmr_variant["pos"],

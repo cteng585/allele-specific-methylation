@@ -308,6 +308,17 @@ def dmr_distances(
     gene_dmr_fn: click.Path(exists=True),
     output_fn: click.Path(),
 ):
+    """Calculate distances between DMRs and variants for a given gene
+
+
+    :param gene_name:
+    :param sample_name:
+    :param config:
+    :param aDM_metadata_fn:
+    :param gene_dmr_fn:
+    :param output_fn:
+    :return:
+    """
     from allele_specific_methylation.workflow import find_dmr_distances
     from allele_specific_methylation.parse import parse_combine_vcf_config
 
