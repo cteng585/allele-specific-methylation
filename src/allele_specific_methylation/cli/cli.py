@@ -296,7 +296,7 @@ def map_phasing_space(
 @click.option(
     "--output",
     "output",
-    type=click.Path(exists=True),
+    type=click.Path(),
     required=True,
     help="Path to the directory where the DMR distances will be saved"
 )

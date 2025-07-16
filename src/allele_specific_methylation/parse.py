@@ -7,7 +7,7 @@ import yaml
 
 
 # TODO: this might be better served as a class
-def parse_combine_vcf_config(config_fn: str | Path, file_type: Literal["yaml", "json"]):
+def parse_combine_vcf_config(config_fn: str | Path, file_type: Literal["yaml", ".yaml", "json", ".json"]):
     """Parse a configuration file for combining VCFs for multiple samples
 
     :param config_fn: path to the configuration file
@@ -15,11 +15,11 @@ def parse_combine_vcf_config(config_fn: str | Path, file_type: Literal["yaml", "
     :return: the parsed configuration as a dictionary
     """
     match file_type:
-        case "yaml":
+        case "yaml" | ".yaml":
             with open(config_fn, "r") as yaml_file:
                 loaded_config = yaml.safe_load(yaml_file)
 
-        case "json":
+        case "json" | ".json":
             with open(config_fn, "r") as json_file:
                 loaded_config = json.load(json_file)
 
