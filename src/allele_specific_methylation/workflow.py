@@ -707,7 +707,7 @@ def find_dmr_distances(
 
         if keep_somatic_vcf:
             concat_vcf = Path(
-                snv_vcf_config=sample_configs[participant_id]["short_read_snv"]["path"]
+                sample_configs[participant_id]["short_read_snv"]["path"]
             ).parent / f"{participant_id}.somatic.vcf.gz"
             concat_vcf = read_vcf(
                 concat(
