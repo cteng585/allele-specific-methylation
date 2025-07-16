@@ -730,7 +730,7 @@ def find_dmr_distances(
     aDM_samples = {}
     for participant_id in aDM_ids:
         fixed_phasing_vcf = Path(
-            sample_configs[participant_id]["long_read_snv"]["path"]
+            sample_configs[participant_id]["long_read"]["path"]
         ).parent / f"{participant_id}.mapped_phasing.vcf.gz"
 
         if fixed_phasing_vcf.exists():
