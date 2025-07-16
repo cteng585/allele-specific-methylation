@@ -300,6 +300,13 @@ def map_phasing_space(
     required=True,
     help="Path to the directory where the DMR distances will be saved"
 )
+@click.option(
+    "--keep_intermediate_vcf",
+    "keep_intermediate_vcf",
+    is_flag=True,
+    default=False,
+    help="Keep intermediate VCF with somatic variants. Can help to speed up subsequent analyses"
+)
 def dmr_distances(
     gene_name: str,
     sample_name: str,
@@ -307,6 +314,7 @@ def dmr_distances(
     aDM_metadata_fn: click.Path(exists=True),
     gene_dmr_fn: click.Path(exists=True),
     output: click.Path(),
+    keep_intermediate_vcf: bool,
 ):
     """Calculate distances between DMRs and variants for a given gene
 
@@ -317,6 +325,7 @@ def dmr_distances(
     :param aDM_metadata_fn:
     :param gene_dmr_fn:
     :param output:
+    :param keep_intermediate_vcf:
     :return:
     """
     from allele_specific_methylation.workflow import find_dmr_distances
@@ -339,6 +348,7 @@ def dmr_distances(
         aDM_metadata_fn=aDM_metadata_fn,
         gene_dmr_fn=gene_dmr_fn,
         output_fn=output_fn,
+        keep_somatic_vcf=keep_intermediate_vcf,
     )
 
 

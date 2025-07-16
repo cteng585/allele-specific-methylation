@@ -661,6 +661,7 @@ def find_dmr_distances(
     aDM_metadata_fn: str | Path,
     gene_dmr_fn: str | Path,
     output_fn: str | Path,
+    keep_somatic_vcf: bool,
 ):
 
     def _make_somatic_vcf(participant_id: str, sample_name: str, sample_configs: dict):
@@ -704,14 +705,18 @@ def find_dmr_distances(
                 case "indel":
                     indel_vcf_subset_fn = subset(vcf.path, samples=sample_name)
 
-        concat_vcf = tempfile.NamedTemporaryFile(delete=False)
+        if keep_somatic_vcf:
+            concat_vcf = Path(
+                snv_vcf_config=sample_configs[participant_id]["short_read_snv"]["path"]
+            ).parent / f"{participant_id}.somatic.vcf.gz"
+        else:
+            concat_vcf = tempfile.NamedTemporaryFile(delete=False)
         concat_vcf = read_vcf(
             concat(
                 [snv_vcf_subset_fn, indel_vcf_subset_fn],
                 concat_vcf.name,
             )
         )
-
         return concat_vcf
 
     # load processing metadata
@@ -748,11 +753,21 @@ def find_dmr_distances(
     # for each sample and each associated aDMR, find the closest somatic variants (cis and trans to
     # the methylated allele)
     for participant_id in aDM_samples:
-        somatic_vcf = _make_somatic_vcf(
-            participant_id,
-            sample_name,
-            sample_configs,
-        )
+        somatic_vcf_fn = Path(
+            sample_configs[participant_id]["short_read_snv"]["path"]
+        ).parent / f"{participant_id}.somatic.vcf.gz"
+        if Path(somatic_vcf_fn).exists():
+            somatic_vcf = read_vcf(
+                Path(
+                    sample_configs[participant_id]["short_read_snv"]["path"]
+                ).parent / f"{participant_id}.somatic.vcf.gz"
+            )
+        else:
+            somatic_vcf = _make_somatic_vcf(
+                participant_id,
+                sample_name,
+                sample_configs,
+            )
 
         aDM_samples[participant_id].label_variants(sample_name, somatic_vcf)
         aDM_samples[participant_id].find_gene_dmrs(gene_dmr)
