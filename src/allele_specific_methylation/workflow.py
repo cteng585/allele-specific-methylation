@@ -734,7 +734,7 @@ def find_dmr_distances(
         ).parent / f"{participant_id}.mapped_phasing.vcf.gz"
 
         if fixed_phasing_vcf_fn.exists():
-            aDM_ids[participant_id] = DMRSample(
+            aDM_samples[participant_id] = DMRSample(
                 participant_id,
                 fixed_phasing_vcf_fn,
             )
