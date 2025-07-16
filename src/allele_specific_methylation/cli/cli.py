@@ -295,7 +295,7 @@ def map_phasing_space(
 )
 @click.option(
     "--output",
-    "output_fn",
+    "output",
     type=click.Path(exists=True),
     required=True,
     help="Path to the directory where the DMR distances will be saved"
@@ -306,7 +306,7 @@ def dmr_distances(
     config: click.Path(exists=True),
     aDM_metadata_fn: click.Path(exists=True),
     gene_dmr_fn: click.Path(exists=True),
-    output_fn: click.Path(),
+    output: click.Path(),
 ):
     """Calculate distances between DMRs and variants for a given gene
 
@@ -316,7 +316,7 @@ def dmr_distances(
     :param config:
     :param aDM_metadata_fn:
     :param gene_dmr_fn:
-    :param output_fn:
+    :param output:
     :return:
     """
     from allele_specific_methylation.workflow import find_dmr_distances
@@ -326,6 +326,11 @@ def dmr_distances(
         config_fn=config,
         file_type=Path(config).suffixes[-1],
     )
+
+    if not Path(output).exists():
+        Path(output).mkdir(parents=True)
+
+    output_fn = Path(output) / f"{gene_name}_dmr_distances.tsv"
 
     find_dmr_distances(
         gene_name=gene_name,
