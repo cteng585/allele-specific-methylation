@@ -24,7 +24,7 @@ def plot_closest_variants(
     for distances_fn in dmr_distances_dir.iterdir():
         try:
             gene_dmr_distances = pl.read_csv(
-                distance_fn,
+                distances_fn,
                 has_header=True,
                 separator="\t",
             )
@@ -32,7 +32,7 @@ def plot_closest_variants(
             # try to parse the gene name from the filename if not present in the DataFrame
             if "gene" not in gene_dmr_distances.columns:
                 gene_dmr_distances = gene_dmr_distances.with_columns(
-                    pl.lit(str(distance_fn.name).split("_")[0]).alias("gene")
+                    pl.lit(str(distances_fn.name).split("_")[0]).alias("gene"),
                 )
 
         # handle case where the gene distance file is empty for some reason
@@ -59,11 +59,11 @@ def plot_closest_variants(
         "trans_variant": "Methylation Trans Variant",
     }
     fig.for_each_trace(
-        lambda t: t.update(
-            name=newnames[t.name],
-            legendgroup=newnames[t.name],
-            hovertemplate=t.hovertemplate.replace(t.name, newnames[t.name])
-        )
+        lambda trace: trace.update(
+            name=relabel[trace.name],
+            legendgroup=relabel[trace.name],
+            hovertemplate=trace.hovertemplate.replace(trace.name, relabel[trace.name]),
+        ),
     )
 
     return fig
