@@ -353,11 +353,53 @@ def dmr_distances(
 
 
 @asm.command()
+@click.option(
+    "--input_path",
+    "input_path",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the input file containing DMR distances"
+)
+@click.option(
+    "--output_path",
+    "output_path",
+    type=click.Path(),
+    required=True,
+    help="Path to the output file where the figure will be saved"
+)
+@click.option(
+    "--type",
+    "figure_type",
+    type=click.Choice(["dmr_distances"], case_sensitive=False),
+    required=True,
+    help="Type of figure to create"
+)
+@click.option(
+    "--nbins",
+    "nbins",
+    type=int,
+    default=50,
+    help="Number of bins for figure types that support binning of data"
+)
 def make_figure(
     input_path: click.Path(),
-    figure_type: str,
     output_path: click.Path(),
+    figure_type: str,
+    nbins: int | None,
 ):
+    match figure_type:
+        case "dmr_distances":
+            from allele_specific_methylation.visualizations.interactive import plot_closest_variants
+
+            fig = plot_closest_variants(
+                dmr_distances_dir=input_path,
+                nbins=nbins,
+            )
+            fig.write_html(output_path)
+
+        case _:
+            raise NotImplementedError(f"Figure type {figure_type} is not implemented")
+
     pass
 
 
