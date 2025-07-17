@@ -1,3 +1,5 @@
+from pathlib import Path
+
 import plotly.express as px
 import polars as pl
 from polars.exceptions import NoDataError
