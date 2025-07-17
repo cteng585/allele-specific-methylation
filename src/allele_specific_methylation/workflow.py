@@ -785,6 +785,7 @@ def find_dmr_distances(
         for dmr_variant in aDM_samples[participant_id].closest_dmr_variant:
             dmr_distances = dmr_distances.vstack(
                 pl.DataFrame({
+                    "gene_name": gene_name,
                     "participant_id": participant_id,
                     "variant_type": dmr_variant["variant_type"],
                     "chrom": dmr_variant["chrom"],
