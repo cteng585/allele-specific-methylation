@@ -352,5 +352,14 @@ def dmr_distances(
     )
 
 
+@asm.command()
+def make_figure(
+    input_path: click.Path(),
+    figure_type: str,
+    output_path: click.Path(),
+):
+    pass
+
+
 if __name__ == "__main__":
     asm()
