@@ -358,7 +358,7 @@ def dmr_distances(
     "input_path",
     type=click.Path(exists=True),
     required=True,
-    help="Path to the input file containing DMR distances"
+    help="Path to the input file for data to plot"
 )
 @click.option(
     "--output_path",
@@ -391,11 +391,15 @@ def make_figure(
         case "dmr_distances":
             from allele_specific_methylation.visualizations.interactive import plot_closest_variants
 
-            fig = plot_closest_variants(
+            fig, distance_table = plot_closest_variants(
                 dmr_distances_dir=input_path,
                 nbins=nbins,
             )
             fig.write_html(output_path)
+            distance_table.write_csv(
+                Path(output_path).parent / "dmr_distances.csv",
+                separator="\t",
+            )
 
         case _:
             raise NotImplementedError(f"Figure type {figure_type} is not implemented")

@@ -66,4 +66,4 @@ def plot_closest_variants(
         ),
     )
 
-    return fig
+    return fig, dmr_distances
