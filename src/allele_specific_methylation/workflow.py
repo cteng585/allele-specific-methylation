@@ -720,6 +720,7 @@ def find_dmr_distances(
         )
         cis_variants = label_variants(
             cis_variants.with_columns(
+                pl.lit(gene).alias("gene"),
                 pl.lit("cis").alias("methylation_relation"),
                 pl.lit(gene_dmr.start).alias("dmr_start"),
                 pl.lit(gene_dmr.end).alias("dmr_end"),
@@ -728,6 +729,7 @@ def find_dmr_distances(
         )
         trans_variants = label_variants(
             trans_variants.with_columns(
+                pl.lit(gene).alias("gene"),
                 pl.lit("trans").alias("methylation_relation"),
                 pl.lit(gene_dmr.start).alias("dmr_start"),
                 pl.lit(gene_dmr.end).alias("dmr_end"),
