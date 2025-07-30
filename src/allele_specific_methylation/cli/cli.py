@@ -259,101 +259,6 @@ def map_phasing_space(
 
 @asm.command()
 @click.option(
-    "--gene_name",
-    "gene_name",
-    type=str,
-    required=True,
-    help="The name of the gene to analyze DMRs for"
-)
-@click.option(
-    "--sample_name",
-    "sample_name",
-    type=str,
-    required=True,
-    help="The name of the sample to analyze DMRs for (e.g. 'TUMOR')"
-)
-@click.option(
-    "--config",
-    "config",
-    type=click.Path(exists=True),
-    required=True,
-    help="Path to the configuration file containing the sample metadata and library IDs"
-)
-@click.option(
-    "--aDM_metadata",
-    "aDM_metadata_fn",
-    type=click.Path(exists=True),
-    required=True,
-    help="Path to the aDM metadata file containing information about the DMRs"
-)
-@click.option(
-    "--gene_dmr",
-    "gene_dmr_fn",
-    type=click.Path(exists=True),
-    required=True,
-    help="Path to the gene DMR file containing information about the DMRs for the gene"
-)
-@click.option(
-    "--output",
-    "output",
-    type=click.Path(),
-    required=True,
-    help="Path to the directory where the DMR distances will be saved"
-)
-@click.option(
-    "--keep_intermediate_vcf",
-    "keep_intermediate_vcf",
-    is_flag=True,
-    default=False,
-    help="Keep intermediate VCF with somatic variants. Can help to speed up subsequent analyses"
-)
-def dmr_distances(
-    gene_name: str,
-    sample_name: str,
-    config: click.Path(exists=True),
-    aDM_metadata_fn: click.Path(exists=True),
-    gene_dmr_fn: click.Path(exists=True),
-    output: click.Path(),
-    keep_intermediate_vcf: bool,
-):
-    """Calculate distances between DMRs and variants for a given gene
-
-
-    :param gene_name:
-    :param sample_name:
-    :param config:
-    :param aDM_metadata_fn:
-    :param gene_dmr_fn:
-    :param output:
-    :param keep_intermediate_vcf:
-    :return:
-    """
-    from allele_specific_methylation.workflow import find_dmr_distances
-    from allele_specific_methylation.parse import parse_combine_vcf_config
-
-    sample_configs = parse_combine_vcf_config(
-        config_fn=config,
-        file_type=Path(config).suffixes[-1],
-    )
-
-    if not Path(output).exists():
-        Path(output).mkdir(parents=True)
-
-    output_fn = Path(output) / f"{gene_name}_dmr_distances.tsv"
-
-    find_dmr_distances(
-        gene_name=gene_name,
-        sample_name=sample_name,
-        sample_configs=sample_configs,
-        aDM_metadata_fn=aDM_metadata_fn,
-        gene_dmr_fn=gene_dmr_fn,
-        output_fn=output_fn,
-        keep_somatic_vcf=keep_intermediate_vcf,
-    )
-
-
-@asm.command()
-@click.option(
     "--input_path",
     "input_path",
     type=click.Path(exists=True),
@@ -397,7 +302,7 @@ def make_figure(
             )
             fig.write_html(output_path)
             distance_table.write_csv(
-                Path(output_path).parent / "dmr_distances.csv",
+                Path(output_path).parent / "dmr_distances.tsv",
                 separator="\t",
             )
 
@@ -405,6 +310,100 @@ def make_figure(
             raise NotImplementedError(f"Figure type {figure_type} is not implemented")
 
     pass
+
+
+@asm.command()
+@click.option(
+    "--mapped_phasing_vcf",
+    "mapped_phased_vcf_fn",
+    type=str,
+    required=True,
+    help="The name of the gene to analyze DMRs for"
+)
+@click.option(
+    "--sample_id",
+    "sample_id",
+    type=str,
+    required=True,
+    help="The name of the sample to analyze DMRs for (e.g. 'TUMOR')"
+)
+@click.option(
+    "--chromosome",
+    "chromosome",
+    type=str,
+    required=True,
+    help="The chromosome to analyze DMRs for (e.g. 'chr1')"
+)
+@click.option(
+    "--config",
+    "config",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the configuration file containing the sample metadata and library IDs"
+)
+@click.option(
+    "--alignment_file",
+    "alignment_file",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the alignment file (BAM/CRAM) for chromosome of the sample. Should be haplotagged"
+)
+@click.option(
+    "--aDM_metadata",
+    "aDM_metadata_fn",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the file containing DMR metadata (e.g. normal methylation status on alleles)"
+)
+@click.option(
+    "--aDMR_fn",
+    "aDMR_fn",
+    type=click.Path(exists=True),
+    required=True,
+    help="Path to the file containing all DMRs"
+)
+@click.option(
+    "--output",
+    "output",
+    type=click.Path(),
+    required=True,
+    help="Path to the directory where the DMR distances will be saved"
+)
+def dmr_distances(
+    mapped_phased_vcf_fn,
+    sample_id: str,
+    chromosome: str,
+    config: click.Path(exists=True),
+    alignment_file: click.Path(exists=True),
+    aDM_metadata_fn: click.Path(exists=True),
+    aDMR_fn: click.Path(exists=True),
+    output: click.Path(),
+):
+    """Calculate distances between DMRs and variants for a given gene
+    """
+    from allele_specific_methylation.workflow import find_dmr_distances
+    from allele_specific_methylation.parse import parse_combine_vcf_config
+
+    sample_configs = parse_combine_vcf_config(
+        config_fn=config,
+        file_type=Path(config).suffixes[-1],
+    )
+
+    if not Path(output).exists():
+        Path(output).mkdir(parents=True)
+
+    output_fn = Path(output) / f"{sample_id}.dmr_distances.{chromosome}.tsv"
+
+    find_dmr_distances(
+        mapped_phased_vcf_fn,
+        sample_id,
+        chromosome,
+        sample_configs,
+        alignment_file,
+        aDM_metadata_fn,
+        aDMR_fn,
+        output_fn,
+    )
 
 
 if __name__ == "__main__":
