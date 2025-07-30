@@ -5,7 +5,6 @@ from pathlib import Path
 import polars as pl
 
 from allele_specific_methylation.vcf_processing.classes import VCF
-from allele_specific_methylation.vcf_processing.parse import read_vcf
 
 
 class GenomeCoord:
