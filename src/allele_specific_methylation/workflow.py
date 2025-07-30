@@ -337,8 +337,8 @@ def map_phasing(
                     if vcf_rename_dict:
                         new_vcf = read_vcf(reheader(new_vcf.path, vcf_rename_dict))
 
-    original_phased = SamplePhasedVariants(original_vcf, sample_name="TUMOR")
-    new_phased = SamplePhasedVariants(new_vcf, sample_name="TUMOR")
+    original_phased = SamplePhasedVariants(original_vcf)
+    new_phased = SamplePhasedVariants(new_vcf)
 
     # first get the coordinates that are shared between the newly phased data and
     # the original long-read data set, then get the phase blocks that each coordinate

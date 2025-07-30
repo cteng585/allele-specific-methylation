@@ -143,10 +143,20 @@ class DMR(GenomeCoord):
 
 
 class SamplePhasedVariants:
-    def __init__(self, vcf: VCF, sample_name: str):
+    def __init__(self, vcf: VCF, sample_name: str | None = None):
         self.data: pl.DataFrame | None = None
         self.__vcf = vcf
-        self.__sample_name = sample_name
+
+        if sample_name is None:
+            if len(self.vcf.samples) == 1:
+                self.__sample_name = self.vcf.samples[0]
+            else:
+                msg = (
+                    "Sample name must be provided when the VCF contains multiple samples. "
+                    "Please specify the sample name."
+                )
+                raise ValueError(msg)
+
         self.__load_phased_variants(vcf)
 
     @property
