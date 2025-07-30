@@ -156,6 +156,8 @@ class SamplePhasedVariants:
                     "Please specify the sample name."
                 )
                 raise ValueError(msg)
+        else:
+            self.__sample_name = sample_name
 
         self.__load_phased_variants(vcf)
 
