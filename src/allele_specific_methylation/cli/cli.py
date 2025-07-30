@@ -356,7 +356,7 @@ def make_figure(
     help="Path to the file containing DMR metadata (e.g. normal methylation status on alleles)"
 )
 @click.option(
-    "--aDMR_fn",
+    "--aDMRs",
     "aDMR_fn",
     type=click.Path(exists=True),
     required=True,
