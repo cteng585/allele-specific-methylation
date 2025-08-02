@@ -474,7 +474,7 @@ def find_promoter_proximal_variants(
         *vcf_fns,
     )
 
-    output_fn = Path(out_dir) / f"{sample_id}.promoter_proximal_variants.tsv"
+    output_fn = Path(out_dir) / f"{sample_id}.promoter_proximal_variants.{window_size}.tsv"
     with open(output_fn, "w") as outfile:
         outfile.write(variant_promoter_intersect)
 
