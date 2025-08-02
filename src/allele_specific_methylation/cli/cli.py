@@ -406,5 +406,77 @@ def dmr_distances(
     )
 
 
+@asm.command()
+@click.argument("sample_id")
+@click.option(
+    "--config", "config", type=click.Path(exists=True), required=True,
+    help="Path to the configuration file containing sample metadata and library IDs"
+)
+@click.option(
+    "--aDM_metadata", "aDM_metadata_fn", type=click.Path(exists=True), required=True,
+    help="Path to the file containing allele-specific methylation metadata"
+)
+@click.option(
+    "--gene_tss", "gene_tss_fn", type=click.Path(exists=True), required=True,
+    help="Path to the file containing gene transcription start sites (TSS)"
+)
+@click.option(
+    "--out_dir", "out_dir", type=click.Path(exists=True), required=True,
+    help="Path to the directory where the promoter proximal variants will be saved"
+)
+@click.option(
+    "--window_size", "window_size", type=int, default=1000,
+    help="Window size around the transcription start site to consider for promoter proximal variants"
+)
+def find_promoter_proximal_variants(
+    sample_id: str,
+    config: click.Path(exists=True),
+    aDM_metadata_fn: click.Path(exists=True),
+    gene_tss_fn: click.Path(exists=True),
+    out_dir: click.Path(exists=True),
+    window_size: int,
+):
+    import polars as pl
+    from allele_specific_methylation.workflow import promoter_proximal_variants
+
+    sample_config = _read_config(config=config, sample_id=sample_id)
+    vcf_fns = [
+        sample_config["short_read_snv"]["path"],
+        sample_config["short_read_indel"]["path"],
+    ]
+
+    aDM_genes = (
+        pl.read_csv(aDM_metadata_fn, separator="\t", has_header=True)
+        .filter(pl.col("aDM_count") > 3)
+        .with_columns(
+            pl.col("pogs_w_aDMs").str.split(",").list.eval(
+                pl.element().str.strip_chars()
+            )
+        )
+        .explode("pogs_w_aDMs")
+        .select("pogs_w_aDMs", "gene")
+        .unique()
+    )
+
+    aDM_promoter_regions = aDM_genes.join(
+        pl.read_csv(gene_tss_fn, separator="\t", has_header=True).select("chrom", "start", "end", "symbol"),
+        left_on="gene",
+        right_on="symbol",
+    ).select(
+        "chrom", "start", "end", "gene"
+    ).unique().sort(
+        "chrom", "start", "end"
+    )
+
+    variant_promoter_intersect = promoter_proximal_variants(
+        aDM_promoter_regions,
+        window_size,
+        *vcf_fns,
+    )
+
+    output_fn = Path(out_dir) / f"{sample_id}.promoter_proximal_variants.tsv"
+    with open(output_fn, "w") as outfile:
+        outfile.write(variant_promoter_intersect)
+
 if __name__ == "__main__":
     asm()

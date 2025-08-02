@@ -1,6 +1,9 @@
+import io
 import json
 import os
 import re
+import shutil
+import subprocess
 import tempfile
 import warnings
 from pathlib import Path
@@ -750,3 +753,98 @@ def find_dmr_distances(
         include_header=True,
         separator="\t",
     )
+
+
+def promoter_proximal_variants(
+    promoter_regions: pl.DataFrame,
+    window_size: int,
+    *vcf_fns: str | Path,
+):
+    """Find the variants that are within N bp of a promoter region
+
+    :return:
+    """
+    if not shutil.which("bedtools"):
+        msg = "bedtools is required for promoter proximal variant detection, but it is not installed."
+        raise EnvironmentError(msg)
+
+    if not {"chrom", "start", "end", "gene"}.issubset(set(promoter_regions.columns)):
+        msg = (
+            f"Expected promoter regions to have columns 'chrom', 'start', and 'end', but got {promoter_regions.columns}"
+        )
+        raise ValueError(msg)
+
+    # broaden the promoter regions by the window size
+    promoter_regions = (
+        promoter_regions
+        .with_columns(
+        (pl.col("start") - window_size).alias("start"),
+            (pl.col("end") + window_size).alias("end"),
+        )
+    )
+
+    # write the promoter regions to a temporary file
+    temp_promoter_bed = tempfile.NamedTemporaryFile(delete=False, suffix=".promoters.bed")
+    temp_promoter_bed.close()
+    promoter_regions.write_csv(
+        temp_promoter_bed.name,
+        include_header=False,
+        separator="\t",
+    )
+
+    # for each VCF file, create a bed-like dataframe of the variant coordinates
+    variant_bed = pl.DataFrame(
+        schema={
+            "chrom": pl.Utf8,
+            "start": pl.Int32,
+            "end": pl.Int32,
+        }
+    )
+    for vcf_fn in vcf_fns:
+        vcf = read_vcf(vcf_fn)
+        if vcf.data.is_empty():
+            continue
+
+        variant_coords = (
+            vcf.data.select(["CHROM", "POS"])
+            .with_columns(end=pl.col("POS") + 1)
+            .rename({"CHROM": "chrom", "POS": "start"})
+        )
+        variant_bed = pl.concat([variant_bed, variant_coords])
+
+    # only keep unique variant coordinates
+    variant_bed = variant_bed.unique().sort(by=["chrom", "start"])
+
+    # write the variant coordinates to a temporary file
+    temp_variant_bed = tempfile.NamedTemporaryFile(delete=False, suffix=".variants.bed")
+    temp_variant_bed.close()
+    variant_bed.write_csv(
+        temp_variant_bed.name,
+        include_header=False,
+        separator="\t",
+    )
+
+    # use bedtools to find the variants that are within the promoter regions
+    try:
+        bedtools_cmd = [
+            "bedtools", "intersect",
+            "-a", temp_variant_bed.name,
+            "-b", temp_promoter_bed.name,
+            "-wa", "-wb",
+        ]
+        result = subprocess.run(
+            bedtools_cmd,
+            capture_output=True,
+            text=True,
+            check=True,
+        )
+        return result.stdout
+
+    except subprocess.CalledProcessError as e:
+        msg = f"bedtools command failed with error: {e.stderr}"
+        raise RuntimeError(msg) from e
+
+    # always cleanup temporary files
+    finally:
+        os.remove(temp_promoter_bed.name)
+        os.remove(temp_variant_bed.name)
