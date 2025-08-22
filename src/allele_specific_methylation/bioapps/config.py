@@ -121,7 +121,7 @@ def generate_config(
 ):
     analysis_dir = Path(analysis_dir.removesuffix("/"))
     participant_study_identifiers = [
-        path_obj.stem for path_obj in Path(analysis_dir).iterdir()
+        re.search(r"^POG[0-9]*", path_obj.stem).group(0) for path_obj in Path(analysis_dir).iterdir()
     ]
     request_handle = RequestHandler()
     bioapps_id_to_pog = patient_identifier_mappings(request_handle, participant_study_identifiers)
