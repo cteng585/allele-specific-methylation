@@ -1,5 +1,6 @@
 import json
 import re
+import warnings
 from pathlib import Path
 from typing import Literal
 
@@ -21,7 +22,9 @@ def patient_identifier_mappings(
     :return:
     """
     patient_analysis_params = {
-        "participant_study_identifier": ",".join(participant_study_identifiers),
+        "participant_study_identifier": ",".join(
+            re.search(r"^POG[0-9]*", study_id).group(0) for study_id in participant_study_identifiers
+        ),
     }
     response = request_handle.get(
         "patient_analysis",
@@ -59,9 +62,8 @@ def patient_identifier_mappings(
     return patient_mappings
 
 
-def patient_libraries(
+def bioapps_libraries(
     request_handle: RequestHandler,
-    participant_study_identifiers: list[str],
     patient_mappings: dict[str, str],
 ):
     library_params = {
@@ -72,46 +74,55 @@ def patient_libraries(
         params=library_params,
     )
 
-    participant_libraries = {
-        participant_study_id: [] for participant_study_id in participant_study_identifiers
-    }
+    source_libraries = {}
     for record in response.json():
-        library_id = record.get("name", None)
-        if not library_id:
+        library_name = record.get("name", None)
+        if not library_name:
             continue
 
-        source = record.get("source")
-        if source and source.get("pathology"):
-            patient_identifier = source["patient"]["patient_identifier"]
-            library_label = record["source"]["pathology"]
+        source = record.get("source", None)
+        if not source:
+            continue
 
-            match library_label:
-                case "Normal":
-                    library_label = "NORMAL"
-                case "Diseased":
-                    library_label = "TUMOR"
-                case _:
-                    raise Exception(f"Unknown library label: {library_label}")
+        if source.get("pathology"):
+            pathology = source["pathology"]
+        elif source.get("pathology_type"):
+            pathology = source["pathology_type"]
+        else:
+            msg = f"No pathology information found for library {library_name}"
+            warnings.warn(msg, RuntimeWarning)
+            continue
 
-            protocol_name = record["protocol"]["name"]
-            if re.search(r"nanopore|genome", protocol_name, re.IGNORECASE):
-                participant_libraries[patient_mappings[patient_identifier]].append(
-                    (library_id, library_label)
-                )
+        source_name = source["original_source_name"]
+        patient_identifier = source["patient"]["patient_identifier"]
 
-    # check that at least 3 libraries (one for short read normal, one for short read tumor, one for long read tumor) are present for each participant
-    wrong_library_num = []
-    for study_identifier in participant_libraries:
-        if len(participant_libraries[study_identifier]) < 3:
-            wrong_library_num.append(study_identifier)
+        match pathology:
+            case "Normal":
+                library_label = "NORMAL"
+            case "Diseased" | "Malignant":
+                library_label = "TUMOR"
+            case _:
+                msg = f"Unknown or unhandled pathology {pathology}"
+                warnings.warn(msg, RuntimeWarning)
+                continue
 
-    if wrong_library_num:
-        raise ValueError(
-            f"Not enough libraries found for the following POG IDs: {', '.join(wrong_library_num)}. "
-            "At least one short read normal, one short read tumor, and one long read tumor library are required."
-        )
+        if source_name not in source_libraries:
+            source_libraries[source_name] = {
+                "patient_id": patient_identifier,
+                "libraries": {
+                    library_name: library_label
+                },
+            }
+        elif patient_identifier != source_libraries[source_name]["patient_id"]:
+            msg = (
+                f"Source {source_name} has multiple patient IDs: "
+                f"{patient_identifier}, {source_libraries[source_name]['patient_id']}"
+            )
+            raise KeyError(msg)
+        else:
+            source_libraries[source_name]["libraries"][library_name] = library_label
 
-    return participant_libraries
+    return source_libraries
 
 
 def generate_config(
@@ -120,35 +131,46 @@ def generate_config(
     config_path: str | Path = "config.yaml",
 ):
     analysis_dir = Path(analysis_dir.removesuffix("/"))
-    participant_study_identifiers = [
-        re.search(r"^POG[0-9]*", path_obj.stem).group(0) for path_obj in Path(analysis_dir).iterdir()
+    source_directories = [
+        path_obj.stem for path_obj in Path(analysis_dir).iterdir()
     ]
     request_handle = RequestHandler()
-    bioapps_id_to_pog = patient_identifier_mappings(request_handle, participant_study_identifiers)
-    pog_libraries = patient_libraries(request_handle, participant_study_identifiers, bioapps_id_to_pog)
+    bioapps_id_to_pog = patient_identifier_mappings(request_handle, source_directories)
+    source_libraries = bioapps_libraries(request_handle, bioapps_id_to_pog)
 
     config = {}
-    for study_identifier in pog_libraries:
-        libraries = {
-            library[0]: library[1] for library in pog_libraries[study_identifier]
-        }
+    for source_directory in source_directories:
+        patient_id = source_libraries[source_directory]["patient_id"]
+        study_id = bioapps_id_to_pog[patient_id]
+        libraries = source_libraries[source_directory]["libraries"]
 
         # account for cases where a study identifier is a constant created by the clair variant calling workflow
         libraries["SAMPLE"] = "TUMOR"
 
-        config[study_identifier] = {
+        # TODO: might want to change the structure of this to:
+        # config[source_directory] = {
+        #     "patient_id": patient_id,
+        #     "study_id": study_id,
+        #     "libraries": {...},
+        #     "paths": {
+        #         "short_read_snv": "...",
+        #         "short_read_indel": "...",
+        #         "long_read": "...",
+        #     },
+        # }
+        config[source_directory] = {
             "short_read_snv": {
-                "path": f"{analysis_dir}/{study_identifier}/short_read.snvs.vcf",
+                "path": f"{analysis_dir}/{source_directory}/short_read.snvs.vcf",
                 "rename": True,
                 "libraries": libraries,
             },
             "short_read_indel": {
-                "path": f"{analysis_dir}/{study_identifier}/short_read.indels.vcf",
+                "path": f"{analysis_dir}/{source_directory}/short_read.indels.vcf",
                 "rename": True,
                 "libraries": libraries,
             },
             "long_read": {
-                "path": f"{analysis_dir}/{study_identifier}/long_read.vcf.gz",
+                "path": f"{analysis_dir}/{source_directory}/long_read.vcf.gz",
                 "rename": True,
                 "libraries": libraries,
             }
@@ -164,5 +186,4 @@ def generate_config(
             with open(config_path, "w") as outfile:
                 json.dump(config, outfile, indent=4)
 
-        case _:
-            raise NotImplementedError(f"Unknown config type: {config_type}")
+    return
