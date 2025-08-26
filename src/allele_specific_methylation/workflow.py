@@ -495,7 +495,7 @@ def filter_hq_indels(
                 sample_metadata = pl.read_csv(sample_metadata, separator=",", ignore_errors=True)
             case _:
                 raise ValueError(f"Unsupported sample metadata file type: {sample_metadata.suffix}")
-        sample_metadata = sample_metadata.filter(pl.col("POG_ID") == sample_id).to_dicts()
+        sample_metadata = sample_metadata.filter(pl.col("tumour_original_source") == sample_id).to_dicts()
         if len(sample_metadata) > 1:
             raise ValueError(
                 f"Multiple entries found for sample ID {sample_id} in the sample metadata file."
@@ -509,7 +509,7 @@ def filter_hq_indels(
         normal_libraries = [sample_metadata.get("illumina_normal_lib")]
         tumor_libraries = [sample_metadata.get("illumina_tumour_lib")]
 
-    if config:
+    elif config:
         if indel_fn is not None:
             msg = (
                 f"A path for filtering indel VCFs is not expected when a config is provided, but got {indel_fn}"
@@ -535,6 +535,13 @@ def filter_hq_indels(
                 tumor_libraries.append(library_id)
             else:
                 raise ValueError(f"Unknown library type: {library_type}")
+
+    # TODO: use the BioApps API to determine if the libraries are normal or tumor
+    # TODO: this should probably be the first option, and if there's an error check if the
+    # TODO: other params exist
+    else:
+        msg = ("Need either a config file or a sample metadata file to determine which libraries are"
+               "normal and which are tumor")
 
     strelka_normal_id, strelka_tumor_id = "NORMAL", "TUMOR"
 
