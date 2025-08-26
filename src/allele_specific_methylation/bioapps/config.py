@@ -9,9 +9,9 @@ import yaml
 from allele_specific_methylation.bioapps.classes import RequestHandler
 
 
-def patient_identifier_mappings(
+def bioapps_libraries(
     request_handle: RequestHandler,
-    participant_study_identifiers: list[str],
+    sample_ids: list[str],
 ) -> list[str]:
     """POG IDs are not the primary identifiers in the BioApps database
 
@@ -23,104 +23,49 @@ def patient_identifier_mappings(
     """
     patient_analysis_params = {
         "participant_study_identifier": ",".join(
-            re.search(r"^POG[0-9]*", study_id).group(0) for study_id in participant_study_identifiers
+            re.search(r"^POG[0-9]*", study_id).group(0) for study_id in sample_ids
         ),
     }
     response = request_handle.get(
         "patient_analysis",
         params=patient_analysis_params,
     )
-    patient_identifiers = [record["patient_identifier"] for record in response.json()]
 
-    patient_params = {
-        "patient_identifier": ",".join(patient_identifiers),
-        "relations": "sources",
-        "sources_columns": "participant_study_identifier",
-    }
-    response = request_handle.get(
-        "patient",
-        params=patient_params,
-    )
-
-    # patient identifier is the primary ID in the BioApps db for a given patient
-    # participant_study_identifier is ordinarily the POG ID but may also be a PATH ID
-    patient_mappings = {}
-    for record in response.json():
-        patient_identifier = record["patient_identifier"]
-        patient_study_ids = [
-            source.get("participant_study_identifier")
-            for source in record.get("sources", [])
-            if
-            source.get("participant_study_identifier") and re.search(
-                r"POG", source.get("participant_study_identifier")
-            )
-        ]
-
-        for patient_study_id in patient_study_ids:
-            patient_mappings[patient_identifier] = patient_study_id
-
-    return patient_mappings
-
-
-def bioapps_libraries(
-    request_handle: RequestHandler,
-    patient_mappings: dict[str, str],
-):
-    library_params = {
-        "patient": ",".join(patient_mappings.keys())
-    }
-    response = request_handle.get(
-        "library/info",
-        params=library_params,
-    )
+    if not response.ok:
+        msg = (
+            f"Failed to retrieve patient analysis information from BioApps API: "
+            f"{response.status_code} {response.reason}"
+        )
+        raise ConnectionError(msg)
 
     source_libraries = {}
     for record in response.json():
-        library_name = record.get("name", None)
-        if not library_name:
-            continue
-
-        source = record.get("source", None)
-        if not source:
-            continue
-
-        if source.get("pathology"):
+        patient_id = record.get("patient_identifier", None)
+        patient_libraries = {}
+        patient_sources = []
+        for source in record["sources"]:
+            patient_sources.append(source["original_source_name"])
             pathology = source["pathology"]
-        elif source.get("pathology_type"):
-            pathology = source["pathology_type"]
-        else:
-            msg = f"No pathology information found for library {library_name}"
-            warnings.warn(msg, RuntimeWarning)
-            continue
 
-        source_name = source["original_source_name"]
-        patient_identifier = source["patient"]["patient_identifier"]
+            match pathology:
+                case "Normal":
+                    library_label = "NORMAL"
+                case "Diseased" | "Malignant":
+                    library_label = "TUMOR"
+                case _:
+                    msg = f"Unknown or unhandled pathology {pathology}"
+                    warnings.warn(msg, RuntimeWarning)
+                    continue
 
-        match pathology:
-            case "Normal":
-                library_label = "NORMAL"
-            case "Diseased" | "Malignant":
-                library_label = "TUMOR"
-            case _:
-                msg = f"Unknown or unhandled pathology {pathology}"
-                warnings.warn(msg, RuntimeWarning)
-                continue
+            for library in source["libraries"]:
+                patient_libraries[library["name"]] = library_label
 
-        if source_name not in source_libraries:
+        for source_name in patient_sources:
             source_libraries[source_name] = {
-                "patient_id": patient_identifier,
-                "libraries": {
-                    library_name: library_label
-                },
+                "patient_id": patient_id,
+                "study_id": record["participant_study_identifier"],
+                "libraries": patient_libraries,
             }
-        elif patient_identifier != source_libraries[source_name]["patient_id"]:
-            msg = (
-                f"Source {source_name} has multiple patient IDs: "
-                f"{patient_identifier}, {source_libraries[source_name]['patient_id']}"
-            )
-            raise KeyError(msg)
-        else:
-            source_libraries[source_name]["libraries"][library_name] = library_label
 
     return source_libraries
 
@@ -135,13 +80,12 @@ def generate_config(
         path_obj.stem for path_obj in Path(analysis_dir).iterdir()
     ]
     request_handle = RequestHandler()
-    bioapps_id_to_pog = patient_identifier_mappings(request_handle, source_directories)
-    source_libraries = bioapps_libraries(request_handle, bioapps_id_to_pog)
+    source_libraries = bioapps_libraries(request_handle, source_directories)
 
     config = {}
     for source_directory in source_directories:
         patient_id = source_libraries[source_directory]["patient_id"]
-        study_id = bioapps_id_to_pog[patient_id]
+        study_id = source_libraries[source_directory]["study_id"]
         libraries = source_libraries[source_directory]["libraries"]
 
         # account for cases where a study identifier is a constant created by the clair variant calling workflow
@@ -159,6 +103,8 @@ def generate_config(
         #     },
         # }
         config[source_directory] = {
+            "patient_id": patient_id,
+            "study_id": study_id,
             "short_read_snv": {
                 "path": f"{analysis_dir}/{source_directory}/short_read.snvs.vcf",
                 "rename": True,
