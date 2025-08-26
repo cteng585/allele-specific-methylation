@@ -42,9 +42,11 @@ def bioapps_libraries(
     for record in response.json():
         patient_id = record.get("patient_identifier", None)
         patient_libraries = {}
+        study_id = set()
         patient_sources = []
         for source in record["sources"]:
             patient_sources.append(source["original_source_name"])
+            study_id.add(source["participant_study_identifier"])
             pathology = source["pathology"]
 
             match pathology:
@@ -60,10 +62,19 @@ def bioapps_libraries(
             for library in source["libraries"]:
                 patient_libraries[library["name"]] = library_label
 
+        if len(study_id) > 1:
+            msg = (
+                f"Multiple study identifiers found for patient {patient_id}: "
+                f"{', '.join(study_id)}"
+                f"Using the first one"
+            )
+            warnings.warn(msg, RuntimeWarning)
+
+        study_id = study_id.pop()
         for source_name in patient_sources:
             source_libraries[source_name] = {
                 "patient_id": patient_id,
-                "study_id": record["participant_study_identifier"],
+                "study_id": study_id,
                 "libraries": patient_libraries,
             }
 
