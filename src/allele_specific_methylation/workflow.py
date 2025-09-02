@@ -115,12 +115,6 @@ def combine_illumina_ont(
                 vcf_rename_dict[sample] = normal_name
             elif tumor_library_pattern.search(sample):
                 vcf_rename_dict[sample] = tumor_name
-            else:
-                msg = (
-                    f"Sample {sample} does not match any library patterns in the renaming dictionary, "
-                    "adjust the renaming dictionary to include this sample."
-                )
-                raise KeyError(msg)
 
         if (
             len([library_id for library_id in vcf_rename_dict if vcf_rename_dict[library_id] == "NORMAL"]) > 1 or
