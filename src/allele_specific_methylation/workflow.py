@@ -592,10 +592,22 @@ def filter_hq_indels(
         .filter(pl.all_horizontal(pl.col(*indel_vcf.samples) != "."))
     )
 
-    rename_dict = {
-        library_id: "NORMAL" if library_id in normal_libraries else "TUMOR"
-        for library_id in included_libraries
-    }
+    normal_library_pattern = re.compile(r"|".join(normal_libraries))
+    tumor_library_pattern = re.compile(r"|".join(tumor_libraries))
+    rename_dict = {}
+    for col_name in write_data.columns:
+        if (
+            normal_library_pattern.search(col_name)
+            and tumor_library_pattern.search(col_name)
+        ):
+            msg = (
+                f"Library {col_name} matches both normal and tumor library patterns in {sample_id} indel VCF."
+            )
+            raise ValueError(msg)
+        elif normal_library_pattern.search(col_name):
+            rename_dict[col_name] = strelka_normal_id
+        elif tumor_library_pattern.search(col_name):
+            rename_dict[col_name] = strelka_tumor_id
 
     # double check that there are not multiple normal libraries or multiple tumor
     # libraries in the same indel VCF
@@ -604,7 +616,8 @@ def filter_hq_indels(
         len([library_id for library_id in rename_dict if rename_dict[library_id] == "TUMOR"]) > 1
     ):
         msg = (
-            f"Trying to rename multiple normal or tumor libraries in {sample_id} indel VCF."
+            f"Multiple libraries found for either {strelka_normal_id} or "
+            f"{strelka_tumor_id} in {sample_id} indel VCF."
         )
         raise ValueError(msg)
 
