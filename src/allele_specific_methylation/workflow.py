@@ -82,17 +82,55 @@ def combine_illumina_ont(
         [snv_fn_rename, indel_fn_rename, long_read_fn_rename], strict=False,
     ):
         # adjust the renaming dictionary to match the names of samples that are actually in the VCF
+        normal_libraries = []
+        tumor_libraries = []
+        for library_name in config_rename_dict:
+            match config_rename_dict[library_name]:
+                case "NORMAL":
+                    normal_libraries.append(library_name)
+                case "TUMOR":
+                    tumor_libraries.append(library_name)
+                case _:
+                    msg = (
+                        f"Library {library_name} has an invalid library type {config_rename_dict[library_name]}"
+                    )
+                    raise ValueError(msg)
+        normal_library_pattern = re.compile(r"|".join(normal_libraries))
+        tumor_library_pattern = re.compile(r"|".join(tumor_libraries))
+
         vcf_rename_dict = {}
-        for rename_pattern in config_rename_dict:
-            for sample in vcf.header.samples:
-                if re.search(rename_pattern, sample, re.IGNORECASE):
-                    if sample in vcf_rename_dict:
-                        msg = (
-                            f"Sample {sample} matches multiple patterns in the renaming dictionary, "
-                        )
-                        raise KeyError(msg)
-                    else:
-                        vcf_rename_dict[sample] = config_rename_dict[rename_pattern]
+        for sample in vcf.header.samples:
+            # not expecting a mixed normal/tumor library, so check if a sample name matches both
+            # normal and tumor libraries
+            if (
+                normal_library_pattern.search(sample)
+                and tumor_library_pattern.search(sample)
+            ):
+                msg = (
+                    f"Sample {sample} matches both normal and tumor library patterns, "
+                    "adjust the renaming dictionary to avoid this."
+                )
+                raise KeyError(msg)
+            elif normal_library_pattern.search(sample):
+                vcf_rename_dict[sample] = normal_name
+            elif tumor_library_pattern.search(sample):
+                vcf_rename_dict[sample] = tumor_name
+            else:
+                msg = (
+                    f"Sample {sample} does not match any library patterns in the renaming dictionary, "
+                    "adjust the renaming dictionary to include this sample."
+                )
+                raise KeyError(msg)
+
+        if (
+            len([library_id for library_id in vcf_rename_dict if vcf_rename_dict[library_id] == "NORMAL"]) > 1 or
+            len([library_id for library_id in vcf_rename_dict if vcf_rename_dict[library_id] == "TUMOR"]) > 1
+        ):
+            msg = (
+                f"Multiple libraries found for either {normal_name} or "
+                f"{tumor_name} in {sample_id} indel VCF."
+            )
+            raise ValueError(msg)
 
         if vcf_rename_dict:
             reheadered_vcf = read_vcf(reheader(vcf.path, vcf_rename_dict))
