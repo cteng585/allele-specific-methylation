@@ -1,8 +1,11 @@
+import os
 import re
 import subprocess
+import tempfile
 from pathlib import Path
 
 import polars as pl
+import pybedtools
 
 from allele_specific_methylation.vcf_processing.classes import VCF
 
@@ -231,195 +234,250 @@ class SampleDMRs:
     def __init__(
         self,
         sample_id: str,
-        phased_variants: SamplePhasedVariants,
-        aDM_metadata: pl.DataFrame,
-        gene_dmr_data: pl.DataFrame,
+        all_aDMRs: pl.DataFrame,
     ):
-        self.__sample_id: str = sample_id
-        self.__sample_name = phased_variants.sample_name
-        self.__phased_variants: SamplePhasedVariants = phased_variants
-        self.__phased_vcf = phased_variants.vcf
-        self.__genes: dict[str, GeneMethylation] = {}
-        self.__dmrs: dict[str, DMR] = {}
-        self.__post_init__(aDM_metadata, gene_dmr_data)
-
-    @property
-    def sample_id(self) -> str:
-        return self.__sample_id
-
-    @property
-    def sample_name(self) -> str:
-        return self.__sample_name
-
-    @property
-    def genes(self):
-        return self.__genes
-
-    @property
-    def dmrs(self):
-        return self.__dmrs
-
-    @property
-    def phased_variants(self) -> SamplePhasedVariants:
-        return self.__phased_variants
-
-    @property
-    def phased_vcf(self) -> VCF:
-        return self.__phased_vcf
-
-    def gene(self, gene_name: str) -> tuple[GeneMethylation, DMR]:
-        return self.__genes.get(gene_name), self.__dmrs.get(gene_name)
-
-    def __post_init__(self, aDM_metadata: pl.DataFrame, gene_dmr_data: pl.DataFrame):
-        gene_metadata = aDM_metadata.filter(
-            pl.col("pogs_w_aDMs").str.contains(self.sample_id)
-        ).select(
-            pl.col("gene", "in_normal")
-        )
-
-        for row in gene_metadata.iter_rows(named=True):
-            self.__genes[row["gene"]] = GeneMethylation(
-                name=row["gene"],
-                normal_methylation=row["in_normal"],
-            )
-
-        for row in gene_dmr_data.filter(
-            pl.col("POGID").str.contains(self.sample_id)
-        ).join(
-            gene_metadata,
-            left_on="symbol",
-            right_on="gene",
-            how="inner",
-        ).iter_rows(named=True):
-            self.__dmrs[row["symbol"]] = DMR(
-                gene=row["symbol"],
-                chrom=row["chr"],
-                start=row["start"],
-                end=row["end"],
-                num_cpgs=row["nCG"],
-                methylation_region_1=row["meanMethy1"],
-                methylation_region_2=row["meanMethy2"],
-            )
+        self.sample_id = sample_id
+        self.dmrs = all_aDMRs.filter(pl.col("POGID") == sample_id)
 
     @staticmethod
-    def __find_ps_range(phase_block_ids: int | list[int], alignment_file: str):
-        samtools_args = ["samtools", "view", "--keep-tag", "PS"]
-        if isinstance(phase_block_ids, int):
-            phase_block_ids = [phase_block_ids]
-        for phase_block_id in phase_block_ids:
-            samtools_args.extend(["-d", f"PS:{phase_block_id}"])
-        samtools_args.extend([alignment_file])
+    def get_reference_span(
+        cigar_string: str,
+    ):
+        # regex to parse CIGAR
+        cigar_ops = re.findall(r"(\d+)([MIDNSHP=X])", cigar_string)
+
+        # Ops that consume reference
+        ref_consuming_ops = {"M", "D", "N", "=", "X"}
+
+        ref_span = 0
+        for length, op in cigar_ops:
+            if op in ref_consuming_ops:
+                ref_span += int(length)
+
+        return ref_span
+
+    def dmr_read_spans(
+        self,
+        alignment_file: str | Path,
+    ):
+        """Use an alignment file to determine the phase block that each DMR is in if one exists
+
+        :return:
+        """
+        dmr_bed = tempfile.NamedTemporaryFile(delete=False, suffix=".temp.bed")
+        dmr_bed.close()
+
+        # make a BED of the DMRs
+        self.dmrs.select(
+            pl.col("CHROM"),
+            pl.col("START"),
+            pl.col("END"),
+        ).write_csv(
+            dmr_bed.name,
+            separator="\t",
+            include_header=False,
+        )
+
+        # get reads that overlap the regions defined in the DMR BED
+        samtools_args = [
+            "samtools", "view",
+            "--keep-tag", "PS",
+            "--region-file", dmr_bed.name,
+            str(alignment_file),
+        ]
         samtools_output = subprocess.Popen(samtools_args, stdout=subprocess.PIPE)
 
-        awk_args = ["awk", "{ print $4,$10,$NF }"]
-        awk_output = subprocess.check_output(awk_args, stdin=samtools_output.stdout)
+        cut_args = [
+            # 3=RNAME, 4=POS, 6=CIGAR, 12=PS
+            "cut", "-f", "3,4,6,12"
+        ]
+        cut_output = subprocess.check_output(cut_args, stdin=samtools_output.stdout)
 
-        ps_coords = pl.DataFrame(
-            [line.split() for line in awk_output.decode().splitlines()],
+        num_expected_fields = 4
+        dmr_phase_blocks = pl.DataFrame(
+            [
+                line.split() for line in cut_output.decode().splitlines()
+                if len(line.split()) == num_expected_fields # can discard reads that haven't been assigned a phase block since they aren't informative
+            ],
             schema={
-                "POS": pl.Int32,
-                "SEQ": pl.String,
-                "PS": pl.String,
+                "CHROM": pl.Utf8,
+                "POS": pl.Int64,
+                "CIGAR": pl.Utf8,
+                "PS": pl.Utf8,
             },
             orient="row",
         )
 
-        ps_coords = (
-            ps_coords
-
-            # get the range of each sequence in each phase block
+        # extract the phase block for each read and calculate the positions
+        # in the reference spanned by each query
+        dmr_read_span = (
+            dmr_phase_blocks
             .with_columns(
-                pl.col("PS").str.split(":").list.last(),
-                pl.col("SEQ").str.len_chars().alias("SEQ_length"),
-            )
-            .with_columns(
-                (pl.col("POS") + pl.col("SEQ_length")).alias("END")
-            )
+                # extract the phase block from the tag format
+                pl.col("PS").str.split(":").list.get(-1).cast(pl.Int32),
 
-            # using the min and max position of each phase block,
-            # get the range of each phase block
-            .group_by("PS").agg(
-                [
-                    pl.col("POS").min().alias("START"),
-                    pl.col("END").max(),
-                ]
+                # get the length of reference sequence that the query aligns to
+                pl.col("CIGAR").map_elements(
+                    self.get_reference_span,
+                    return_dtype=pl.Int64,
+                ).alias("REF_SPAN"),
+            )
+            # calculate the reference end coordinate of the query
+            .with_columns(
+                (pl.col("POS") + pl.col("REF_SPAN")).alias("END"),
+            )
+            .drop("CIGAR", "REF_SPAN")
+        )
+
+        # get the span for each phase block
+        dmr_read_span = (
+            dmr_read_span
+            .group_by("CHROM", "PS")
+            .agg(
+                pl.col("POS").min().alias("START"),
+                pl.col("END").max(),
             )
         )
-        return ps_coords
 
-    def dmr_phased_variants(
+        # clean up the tempfile
+        os.remove(dmr_bed.name)
+
+        return dmr_read_span
+
+    def phase_block_spans(
         self,
-        gene_name: str,
+        dmr_phase_blocks: pl.DataFrame,
         alignment_file: str | Path,
     ):
-        # get the DMR for the gene
-        _, gene_dmr = self.gene(gene_name)
+        phased_reads = pl.DataFrame()
 
-        # find candidate phase blocks that might involve the DMR so that variants
-        # in phase with the DMR can be found
-        proximal_phase_blocks = pl.DataFrame()
-        search_window_offset = 10000
-        while proximal_phase_blocks.height == 0:
-            phase_block_search = self.phased_variants.data.select("CHROM", "POS", "PS").filter(
-                (pl.col("CHROM") == gene_dmr.chrom) &
-                (
-                    pl.col("POS").is_between(
-                        gene_dmr.start - search_window_offset, gene_dmr.end + search_window_offset
-                    )
-                )
-            ).unique(
-                subset=["CHROM", "PS"]
+        for _, chr_group in dmr_phase_blocks.group_by("CHROM"):
+            tag_file = tempfile.NamedTemporaryFile(delete=False)
+            tag_file.write(
+                "\n".join(
+                    str(ps) for ps in chr_group.select("PS").to_series().to_list()
+                ).encode("utf-8")
             )
-            if phase_block_search.height != 0:
-                proximal_phase_blocks = phase_block_search
-            else:
-                search_window_offset = search_window_offset * 10
+            tag_file.close()
+            chrom = chr_group.select("CHROM").row(0)[0]
 
-        # check that there are reads on the same chromosome as the DMR
-        idxstats = ["samtools", "idxstats", alignment_file]
-        grep = ["grep", f"^{gene_dmr.chrom}\t"]
-        cut = ["cut", "-f", "3"]
-        process = subprocess.Popen(idxstats, stdout=subprocess.PIPE)
-        process = subprocess.Popen(grep, stdin=process.stdout, stdout=subprocess.PIPE)
-        process = subprocess.Popen(cut, stdin=process.stdout, stdout=subprocess.PIPE)
-        stdout, stderr = process.communicate()
-        num_chr_reads = int(stdout.decode().strip())
-        if num_chr_reads == 0:
-            msg = (
-                f"There are no reads on chromosome {gene_dmr.chrom} "
-                f"in the alignment file {alignment_file}."
+            samtools_args = [
+                "samtools", "view",
+                "--keep-tag", "PS",
+                "-D", f"PS:{tag_file.name}",
+                str(alignment_file),
+                chrom,
+            ]
+            samtools_output = subprocess.Popen(samtools_args, stdout=subprocess.PIPE)
+
+            cut_args = [
+                # 3=RNAME, 4=POS, 6=CIGAR, 12=PS
+                "cut", "-f", "3,4,6,12"
+            ]
+            cut_output = subprocess.check_output(cut_args, stdin=samtools_output.stdout)
+
+            num_expected_fields = 4
+            chrom_reads = pl.DataFrame(
+                [
+                    line.split() for line in cut_output.decode().splitlines()
+                    if len(line.split()) == num_expected_fields # can discard reads that haven't been assigned a phase block since they aren't informative
+                ],
+                schema={
+                    "CHROM": pl.Utf8,
+                    "POS": pl.Int64,
+                    "CIGAR": pl.Utf8,
+                    "PS": pl.Utf8,
+                },
+                orient="row",
             )
-            raise ValueError(msg)
+            phased_reads = phased_reads.vstack(chrom_reads)
+            os.remove(tag_file.name)
 
-        ps_coords = self.__find_ps_range(
-            proximal_phase_blocks.select("PS").to_series().to_list(),
-            alignment_file,
+        # calculate the positions in the reference spanned by each query
+        phased_reads = (
+            phased_reads
+            .with_columns(
+                # extract the phase block from the tag format
+                pl.col("PS").str.split(":").list.get(-1).cast(pl.Int32),
+
+                # get the length of reference sequence that the query aligns to
+                pl.col("CIGAR").map_elements(
+                    self.get_reference_span,
+                    return_dtype=pl.Int64,
+                ).alias("REF_SPAN"),
+            )
+            # calculate the reference end coordinate of the query
+            .with_columns(
+                (pl.col("POS") + pl.col("REF_SPAN")).alias("END"),
+            )
+            .drop("CIGAR", "REF_SPAN")
         )
 
-        # find any phase blocks that overlap with the DMR
-        dmr_phase_blocks = ps_coords.with_columns(
-            pl.struct(["START", "END"]).map_elements(
-                lambda ps_range: range(
-                    max(ps_range["START"], gene_dmr.start), min(ps_range["END"], gene_dmr.end + 1)
-                )
-            ).alias("OVERLAP")
+        # get the span for each phase block
+        phase_block_spans = (
+            phased_reads
+            .group_by("CHROM", "PS")
+            .agg(
+                pl.col("POS").min().alias("START"),
+                pl.col("END").max(),
+            )
+        )
+
+        return phase_block_spans
+
+    def ps_tag_dmrs(
+        self,
+        dmr_read_spans: pl.DataFrame,
+    ):
+        dmr_spans_bed = tempfile.NamedTemporaryFile(delete=False, suffix=".bed")
+        dmr_spans_bed.close()
+        dmr_read_spans.select("CHROM", "START", "END", "PS").write_csv(
+            dmr_spans_bed.name,
+            separator="\t",
+            include_header=False,
+        )
+        dmr_spans_bed = pybedtools.BedTool(dmr_spans_bed.name)
+
+        sample_dmrs_bed = tempfile.NamedTemporaryFile(delete=False, suffix=".bed")
+        sample_dmrs_bed.close()
+        self.dmrs.select(
+            "CHROM", "START", "END"
+        ).write_csv(
+            sample_dmrs_bed.name,
+            separator="\t",
+            include_header=False,
+        )
+        sample_dmrs_bed = pybedtools.BedTool(sample_dmrs_bed.name)
+
+        intersect_bed = tempfile.NamedTemporaryFile(delete=False, suffix=".bed")
+        intersect_bed.close()
+        tagged_sample_dmrs_bed = sample_dmrs_bed.intersect(
+            dmr_spans_bed,
+            wao=True,
         ).filter(
-            pl.col("OVERLAP").list.len() > 0
+            lambda interval: interval.fields[3] != "."
+        )
+        tagged_sample_dmrs_bed = tagged_sample_dmrs_bed.saveas(intersect_bed.name)
+
+        self.dmrs = self.dmrs.join(
+            pl.read_csv(
+                intersect_bed.name,
+                separator="\t",
+                has_header=False,
+            ).select(
+                "column_1", "column_2", "column_3", "column_7"
+            ).rename(
+                {
+                    "column_1": "CHROM",
+                    "column_2": "START",
+                    "column_3": "END",
+                    "column_7": "PS",
+                }
+            ),
+            left_on=["CHROM", "START", "END"],
+            right_on=["CHROM", "START", "END"],
+            how="inner",
         )
 
-        # there should only be one phase block that spans the DMR
-        if dmr_phase_blocks.height > 1:
-            msg = f"There are {dmr_phase_blocks.height} phase blocks that span the DMR, expected 1."
-            raise ValueError(msg)
-        elif dmr_phase_blocks.height == 0:
-            msg = f"There are no phase blocks that span the DMR for gene {gene_name}."
-            raise ValueError(msg)
-
-        dmr_phase_block = int(dmr_phase_blocks.to_dicts()[0]["PS"])
-
-        return self.phased_variants.data.filter(
-            (pl.col("PS") == dmr_phase_block)
-        ).with_columns(
-            (pl.col("POS") - gene_dmr.start).alias("distance_to_dmr_start"),
-            (pl.col("POS") - gene_dmr.end).alias("distance_to_dmr_end"),
-        )
+        for temp_bed in [dmr_spans_bed.fn, sample_dmrs_bed.fn, tagged_sample_dmrs_bed.fn]:
+            os.remove(temp_bed)

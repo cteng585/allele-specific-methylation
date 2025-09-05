@@ -372,7 +372,6 @@ def make_figure(
 def dmr_distances(
     mapped_phased_vcf_fn,
     sample_id: str,
-    chromosome: str,
     config: click.Path(exists=True),
     alignment_file: click.Path(exists=True),
     aDM_metadata_fn: click.Path(exists=True),
@@ -392,18 +391,17 @@ def dmr_distances(
     if not Path(output).exists():
         Path(output).mkdir(parents=True)
 
-    output_fn = Path(output) / f"{sample_id}.dmr_distances.{chromosome}.tsv"
+    output_fn = Path(output) / f"{sample_id}.dmr_distances.tsv"
 
-    find_dmr_distances(
+    variant_dmr_distances = find_dmr_distances(
         mapped_phased_vcf_fn,
         sample_id,
-        chromosome,
         sample_configs,
         alignment_file,
         aDM_metadata_fn,
         aDMR_fn,
-        output_fn,
     )
+    variant_dmr_distances.write_csv(output_fn, separator="\t")
 
 
 @asm.command()

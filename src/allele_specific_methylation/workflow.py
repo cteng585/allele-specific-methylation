@@ -1,4 +1,3 @@
-import io
 import json
 import os
 import re
@@ -12,7 +11,6 @@ import polars as pl
 import pysam
 import yaml
 
-from allele_specific_methylation.methylation.classes import SamplePhasedVariants
 from allele_specific_methylation.methylation.utils import hamming
 
 from allele_specific_methylation.vcf_processing.classes import VCF
@@ -335,6 +333,8 @@ def map_phasing(
     :param rename_dict: a dictionary for renaming the sample names in the VCF files
     :return:
     """
+    from allele_specific_methylation.methylation.classes import SamplePhasedVariants
+
     # this should also resolve the variant records themselves, not just the dataframe
     def update_variant_genotypes(variant_index: int, genotype: str, sample_name: str,
                                  variant_records: list[pysam.VariantRecord]):
@@ -712,17 +712,16 @@ def filter_genotyped_variants(
 def find_dmr_distances(
     mapped_phased_vcf_fn: str | Path,
     sample_id: str,
-    chromosome: str,
     sample_configs: dict,
     alignment_file: str | Path,
     aDM_metadata_fn: str | Path,
     aDMR_fn: str | Path,
-    output_fn: str | Path,
 ):
-    from allele_specific_methylation.methylation.annotate import label_variants, split_methylation_variants
-    from allele_specific_methylation.methylation.classes import SampleDMRs
+    from allele_specific_methylation.methylation.annotate import find_variant_dmr_distances
+    from allele_specific_methylation.methylation.classes import SampleDMRs, SamplePhasedVariants
+    from allele_specific_methylation.vcf_processing.parse import read_vcf
 
-    # load processing metadata
+    # read in metadata files
     aDM_metadata = pl.read_csv(aDM_metadata_fn, separator="\t")
     all_aDM_DMRs = pl.read_csv(aDMR_fn, separator="\t")
 
@@ -804,7 +803,98 @@ def find_dmr_distances(
         output_fn,
         include_header=True,
         separator="\t",
+    all_aDM_DMRs = pl.read_csv(aDMR_fn, separator="\t").rename(
+        {
+            "chr": "CHROM",
+            "start": "START",
+            "end": "END",
+        }
     )
+
+    # get the coordinates for somatic variants from the short read data
+    snv_vcf = read_vcf(sample_configs[sample_id]["short_read_snv"]["path"])
+    indel_vcf = read_vcf(sample_configs[sample_id]["short_read_indel"]["path"])
+    somatic_variant_coords = pl.concat(
+        [snv_vcf.data.select(["CHROM", "POS"]), indel_vcf.data.select(["CHROM", "POS"])],
+    ).unique(
+        subset=["CHROM", "POS"],
+    )
+
+    # read in the merged variant VCF that has been phased with long read data and mapped
+    # back to the original phasing space
+    mapped_phased_vcf = read_vcf(mapped_phased_vcf_fn)
+
+    # extract only phased variants from the VCF and parse out the haplotypes and phase blocks
+    phased_variants = SamplePhasedVariants(mapped_phased_vcf, sample_name="TUMOR")
+
+    # get the regions defined as differentially methylated for the sample
+    sample_dmrs = SampleDMRs(sample_id, all_aDM_DMRs)
+
+    # get the reads that directly overlap the DMR and find what phase block they are in
+    dmr_read_spans = sample_dmrs.dmr_read_spans(alignment_file=alignment_file)
+    sample_dmrs.ps_tag_dmrs(dmr_read_spans)
+
+    # filter down the phased variants to the informative ones for allele-specific methylation
+    dmr_phased_variants = (
+        phased_variants.data
+        # filter down to phased variants that are heterozygous
+        .filter(
+            pl.col("HP1") != pl.col("HP2")
+        )
+        # filter down to somatic variants
+        .join(
+            somatic_variant_coords.select("CHROM", "POS"),
+            on=["CHROM", "POS"],
+            how="inner",
+        )
+        # filter down to variants that are phased with the DMRs
+        .join(
+            sample_dmrs.dmrs.select("CHROM", "PS"),
+            on=["CHROM", "PS"],
+            how="inner",
+        )
+    )
+
+    # find the distance between each variant and the DMR it is phased with
+    variant_types = find_variant_dmr_distances(
+        sample_dmrs,
+        dmr_phased_variants,
+    )
+
+    # concatenate the variant types into a single dataframe
+    variant_dmr_distances = pl.concat([
+        variant_types["HP1"]["methylation_cis"].with_columns(
+            variant_allele=pl.lit("HP1"),
+            methylated_allele=pl.lit("HP1"),
+        ).drop("GT", "HP1", "HP2").rename({"CHROM": "chr", "POS": "pos", "START": "start", "END": "end"}),
+        variant_types["HP2"]["methylation_cis"].with_columns(
+            variant_allele=pl.lit("HP2"),
+            methylated_allele=pl.lit("HP2"),
+        ).drop("GT", "HP1", "HP2"),
+        variant_types["HP1"]["methylation_trans"].with_columns(
+            variant_allele=pl.lit("HP1"),
+            methylated_allele=pl.lit("HP2"),
+        ).drop("GT", "HP1", "HP2"),
+        variant_types["HP2"]["methylation_trans"].with_columns(
+            variant_allele=pl.lit("HP2"),
+            methylated_allele=pl.lit("HP1"),
+        ).drop("GT", "HP1", "HP2"),
+    ]).select(
+        "chr",
+        "start",
+        "end",
+        "pos",
+        "gene",
+        "strand",
+        "shortest_distance_to_dmr",
+        "direction",
+        "variant_allele",
+        "methylated_allele"
+    ).sort(
+        by=["chr", "start", "end", "pos", "gene"],
+    )
+
+    return variant_dmr_distances
 
 
 def promoter_proximal_variants(

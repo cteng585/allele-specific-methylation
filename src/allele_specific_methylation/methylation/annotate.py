@@ -12,8 +12,6 @@ def label_variants(variants: pl.DataFrame, somatic_variants: VCF | pl.DataFrame)
         somatic_variant_coords = somatic_variants.data.select("CHROM", "POS")
     elif isinstance(somatic_variants, pl.DataFrame):
         somatic_variant_coords = somatic_variants.select("CHROM", "POS")
-    else:
-        raise TypeError
 
     return variants.join(
         somatic_variant_coords.with_columns(
@@ -102,3 +100,114 @@ def split_methylation_variants(
             pass
 
     return cis_variants, trans_variants
+
+
+def find_variant_dmr_distances(
+    sample_dmrs: SampleDMRs,
+    dmr_phased_variants: pl.DataFrame,
+):
+    # make a bool mask for DMRs where HP[i] == 1 indicates that
+    # the i'th HP has methylation for a given DMR
+    dmr_methylation_mask = sample_dmrs.dmrs.with_columns(
+        HP1=(
+            pl
+            .when(pl.col("meanMethy1") > pl.col("meanMethy2"))
+            .then(1)
+            .when(pl.col("meanMethy1") < pl.col("meanMethy2"))
+            .then(0)
+            .otherwise(-1)
+        ),
+        HP2=(
+            pl
+            .when(pl.col("meanMethy2") > pl.col("meanMethy1"))
+            .then(1)
+            .when(pl.col("meanMethy2") < pl.col("meanMethy1"))
+            .then(0)
+            .otherwise(-1)
+        ),
+    ).select(
+        "symbol", "CHROM", "START", "END", "strand", "HP1", "HP2", "PS"
+    )
+    methylated_dmrs = {
+        "HP1":dmr_methylation_mask.filter(
+            pl.col("HP1") == 1
+        ),
+        "HP2": dmr_methylation_mask.filter(
+            pl.col("HP2") == 1
+        ),
+    }
+
+    # check that there are no DMRs that are considered methylated
+    # on both alleles
+    if not methylated_dmrs["HP1"].join(
+        methylated_dmrs["HP2"],
+        on=["CHROM", "START", "END"],
+        how="inner",
+    ).is_empty():
+        msg = (
+            "There should not be DMRs that are considered methylated on both HP1 and HP2, but found some"
+        )
+        raise ValueError(msg)
+
+    methylated = 1
+    variant_types = {
+        "HP1": {"methylation_cis": None, "methylation_trans": None},
+        "HP2": {"methylation_cis": None, "methylation_trans": None},
+    }
+    for variant_haplotype in ["HP1", "HP2"]:
+        for dmr_haplotype in ["HP1", "HP2"]:
+            variant_subset = (
+                dmr_phased_variants
+                .filter(
+                    pl.col(variant_haplotype) == methylated
+                )
+                .join(
+                    methylated_dmrs[dmr_haplotype].select(
+                        "CHROM", dmr_haplotype, "PS", "START", "END", "strand", "symbol"
+                    ),
+                    left_on=["CHROM", variant_haplotype, "PS"],
+                    right_on=["CHROM", dmr_haplotype, "PS"],
+                    how="inner",
+                )
+                .unique()
+            )
+
+            # calculate the distance and orientation of each variant to DMRs in the same phase block
+            variant_subset = (
+                variant_subset
+                .with_columns(
+                    # take the smaller of variant-to-start vs variant-to-end as the distance
+                    # of the variant to the DMR
+                    pl.min_horizontal(
+                        abs(pl.col("POS") - pl.col("START")),
+                        abs(pl.col("POS") - pl.col("END"),)
+                    ).alias("shortest_distance_to_dmr"),
+                    (
+                        pl.when(
+                            (pl.col("POS") < pl.col("START")) & (pl.col("strand") == "+")
+                        ).then(pl.lit("upstream"))
+                        .when(
+                            (pl.col("POS") > pl.col("END")) & (pl.col("strand") == "+")
+                        ).then(pl.lit("downstream"))
+                        .when(
+                            (pl.col("POS") > pl.col("END")) & (pl.col("strand") == "-")
+                        ).then(pl.lit("upstream"))
+                        .when(
+                            (pl.col("POS") < pl.col("START")) & (pl.col("strand") == "-")
+                        ).then(pl.lit("downstream"))
+                        .when(
+                            (pl.col("POS").is_between(pl.col("START"), pl.col("END")))
+                        ).then(pl.lit("intragenic"))
+                    ).alias("direction"),
+                )
+            )
+
+            if variant_haplotype == dmr_haplotype:
+                variant_dmr_relationship = "methylation_cis"
+            else:
+                variant_dmr_relationship = "methylation_trans"
+            # variant_types["HP1"]["methylation_cis"] -> HP1 variant allele | HP1 methylation
+            # variant_types["HP1"]["methylation_trans"] -> HP1 variant allele | HP2 methylation
+            variant_types[variant_haplotype][variant_dmr_relationship] = variant_subset
+
+    return variant_types
