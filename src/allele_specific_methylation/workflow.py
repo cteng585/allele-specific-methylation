@@ -786,19 +786,27 @@ def find_dmr_distances(
         variant_types["HP1"]["methylation_cis"].with_columns(
             variant_allele=pl.lit("HP1"),
             methylated_allele=pl.lit("HP1"),
-        ).drop("GT", "HP1", "HP2").rename({"CHROM": "chr", "POS": "pos", "START": "start", "END": "end"}),
+        ).drop("GT", "HP1", "HP2").rename(
+            {"CHROM": "chr", "POS": "pos", "START": "start", "END": "end", "symbol": "gene"}
+        ),
         variant_types["HP2"]["methylation_cis"].with_columns(
             variant_allele=pl.lit("HP2"),
             methylated_allele=pl.lit("HP2"),
-        ).drop("GT", "HP1", "HP2"),
+        ).drop("GT", "HP1", "HP2").rename(
+            {"CHROM": "chr", "POS": "pos", "START": "start", "END": "end", "symbol": "gene"}
+        ),
         variant_types["HP1"]["methylation_trans"].with_columns(
             variant_allele=pl.lit("HP1"),
             methylated_allele=pl.lit("HP2"),
-        ).drop("GT", "HP1", "HP2"),
+        ).drop("GT", "HP1", "HP2").rename(
+            {"CHROM": "chr", "POS": "pos", "START": "start", "END": "end", "symbol": "gene"}
+        ),
         variant_types["HP2"]["methylation_trans"].with_columns(
             variant_allele=pl.lit("HP2"),
             methylated_allele=pl.lit("HP1"),
-        ).drop("GT", "HP1", "HP2"),
+        ).drop("GT", "HP1", "HP2").rename(
+            {"CHROM": "chr", "POS": "pos", "START": "start", "END": "end", "symbol": "gene"}
+        ),
     ]).select(
         "chr",
         "start",
