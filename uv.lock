@@ -16,10 +16,12 @@ dependencies = [
     { name = "plotnine" },
     { name = "polars" },
     { name = "pyarrow" },
+    { name = "pybedtools" },
     { name = "pysam" },
     { name = "pyyaml" },
     { name = "scipy" },
     { name = "setuptools" },
+    { name = "statsmodels" },
 ]
 
 [package.dev-dependencies]
@@ -41,10 +43,12 @@ requires-dist = [
     { name = "plotnine", specifier = ">=0.14.5" },
     { name = "polars", specifier = ">=1.22.0" },
     { name = "pyarrow", specifier = ">=19.0.1" },
+    { name = "pybedtools", specifier = ">=0.12.0" },
     { name = "pysam", specifier = ">=0.23.3" },
     { name = "pyyaml", specifier = ">=6.0.2" },
     { name = "scipy", specifier = ">=1.15.2" },
     { name = "setuptools", specifier = ">=75.8.0" },
+    { name = "statsmodels", specifier = ">=0.14.4" },
 ]
 
 [package.metadata.requires-dev]
@@ -1500,6 +1504,17 @@ wheels = [
     { url = "https://files.pythonhosted.org/packages/23/1b/716d4cd5a3cbc387c6e6745d2704c4b46654ba2668260d25c402626c5ddb/pyarrow-19.0.1-cp313-cp313t-manylinux_2_28_aarch64.whl", hash = "sha256:7c1bca1897c28013db5e4c83944a2ab53231f541b9e0c3f4791206d0c0de389a", size = 40464851, upload-time = "2025-02-18T18:54:57.073Z" },
     { url = "https://files.pythonhosted.org/packages/ed/bd/54907846383dcc7ee28772d7e646f6c34276a17da740002a5cefe90f04f7/pyarrow-19.0.1-cp313-cp313t-manylinux_2_28_x86_64.whl", hash = "sha256:58d9397b2e273ef76264b45531e9d552d8ec8a6688b7390b5be44c02a37aade8", size = 42085744, upload-time = "2025-02-18T18:55:08.562Z" },
 ]
+
+[[package]]
+name = "pybedtools"
+version = "0.12.0"
+source = { registry = "https://pypi.org/simple" }
+dependencies = [
+    { name = "numpy" },
+    { name = "pandas" },
+    { name = "pysam" },
+]
+sdist = { url = "https://files.pythonhosted.org/packages/89/93/5878b1eed2e0b6662002d069763025e4374c16ad3d18d8e10a9fefac7b16/pybedtools-0.12.0.tar.gz", hash = "sha256:8786ec9f6579c81363c00b437344438df79cf128860e5cae2466926181547249", size = 12608236, upload-time = "2025-03-16T14:03:43.216Z" }
 
 [[package]]
 name = "pycparser"
