@@ -328,13 +328,6 @@ def make_figure(
     help="The name of the sample to analyze DMRs for (e.g. 'TUMOR')"
 )
 @click.option(
-    "--chromosome",
-    "chromosome",
-    type=str,
-    required=True,
-    help="The chromosome to analyze DMRs for (e.g. 'chr1')"
-)
-@click.option(
     "--config",
     "config",
     type=click.Path(exists=True),
@@ -342,11 +335,11 @@ def make_figure(
     help="Path to the configuration file containing the sample metadata and library IDs"
 )
 @click.option(
-    "--alignment_file",
+    "--haplotagged_alignment",
     "alignment_file",
     type=click.Path(exists=True),
     required=True,
-    help="Path to the alignment file (BAM/CRAM) for chromosome of the sample. Should be haplotagged"
+    help="Path to the alignment file (BAM/CRAM) from which sample DMRs were derived. Should be haplotagged"
 )
 @click.option(
     "--aDM_metadata",
